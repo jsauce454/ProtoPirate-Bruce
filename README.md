@@ -7,6 +7,7 @@ A JavaScript port of the ProtoPirate car key fob decoder for the **Lilygo T-Embe
 - **Real-time signal capture and decoding** using the CC1101 radio
 - **Enhanced multi-protocol support** - automatically detects and decodes 11+ car key protocols
 - **Frequency selection** - switch between 315 MHz, 433.92 MHz, and 868.35 MHz
+- **Load saved signals** - browse and decode .sub files from SD card
 - **Rolling code transmission** - increment counter, recalculate CRC, and transmit
 - **CRC validation** - verifies signal integrity (Kia V0/V1/V2 fully implemented)
 - **Save decoded signals** - stores to .sub files compatible with Bruce/Flipper
@@ -66,6 +67,7 @@ A JavaScript port of the ProtoPirate car key fob decoder for the **Lilygo T-Embe
 ### Main Menu
 
 - **Receive Signal** - Start capturing at selected frequency
+- **Load Signal** - Browse and decode saved .sub files from SD card
 - **Set Frequency** - Choose 315 MHz (US), 433.92 MHz (EU/Asia), or 868.35 MHz (EU)
 - **Protocol Info** - View supported protocols
 - **Exit** - Return to Bruce menu
@@ -240,6 +242,7 @@ function kiaCrc8(bytes) {
 ## Version History
 
 ### v2.1
+- Added Load Signal feature - browse and decode .sub files from SD card
 - Added Chrysler/Jeep protocol decoder (64-bit KeeLoq @ 315 MHz)
 - Added frequency selection menu (315/433.92/868.35 MHz)
 - UI improvements for multi-frequency support

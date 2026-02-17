@@ -40,7 +40,7 @@ var GRAY = color(80, 80, 80);
 
 // App state
 var menuIndex = 0;
-var menuItems = ["Receive Signal", "Set Frequency", "Protocol Info", "Exit"];
+var menuItems = ["Receive Signal", "Load Signal", "Set Frequency", "Protocol Info", "Exit"];
 var appState = "menu";
 var lastResult = null;
 var lastRawData = "";
@@ -1015,14 +1015,182 @@ function tryDecode(pulses) {
 // SAVE AND TRANSMIT
 // ============================================================================
 
+var saveCounter = 0;
+var loadedFiles = [];
+var loadFileIndex = 0;
+
+// ============================================================================
+// LOAD SIGNAL
+// ============================================================================
+
+function scanForFiles() {
+    loadedFiles = [];
+    // Try to list .sub files from common directories
+    var dirs = ["/", "/BruceRF/", "/subghz/"];
+    
+    for (var d = 0; d < dirs.length; d++) {
+        try {
+            var files = storage.readdir(dirs[d]);
+            if (files && files.length) {
+                for (var i = 0; i < files.length; i++) {
+                    var fname = files[i];
+                    if (fname && fname.length > 4) {
+                        var ext = fname.substring(fname.length - 4).toLowerCase();
+                        if (ext === ".sub") {
+                            loadedFiles.push(dirs[d] + fname);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Directory doesn't exist or can't be read
+        }
+    }
+    return loadedFiles.length;
+}
+
+function loadAndDecodeFile(filepath) {
+    drawMessage("Loading...\n" + filepath, YELLOW);
+    
+    try {
+        var content = storage.read(filepath);
+        if (!content || content.length < 20) {
+            drawMessage("File empty or\ntoo small!", RED);
+            delay(1500);
+            return false;
+        }
+        
+        // Extract RAW_Data from file
+        var rawStr = extractRawData(content);
+        if (!rawStr || rawStr.length < 10) {
+            drawMessage("No RAW_Data found\nin file!", RED);
+            delay(1500);
+            return false;
+        }
+        
+        // Parse and decode
+        var pulses = parseRaw(rawStr);
+        if (pulses.length < 20) {
+            drawMessage("Not enough data\nto decode!", RED);
+            delay(1500);
+            return false;
+        }
+        
+        var result = tryDecode(pulses);
+        if (result) {
+            lastResult = result;
+            lastRawData = rawStr;
+            resultMenuIndex = 0;
+            appState = "result";
+            drawResult(result);
+            delay(300);
+            return true;
+        } else {
+            drawMessage("Could not decode\nprotocol!", RED);
+            delay(1500);
+            return false;
+        }
+    } catch (e) {
+        drawMessage("Error reading file!", RED);
+        delay(1500);
+        return false;
+    }
+}
+
+function drawLoadMenu() {
+    clearScreen();
+    setTextSize(2); setTextColor(CYAN);
+    drawString("Load Signal", 10, 5);
+    setTextSize(1);
+    
+    if (loadedFiles.length === 0) {
+        setTextColor(RED);
+        drawString("No .sub files found!", 10, 35);
+        setTextColor(WHITE);
+        drawString("Save a signal first,", 10, 55);
+        drawString("or copy .sub files to", 10, 70);
+        drawString("SD card root.", 10, 85);
+    } else {
+        setTextColor(WHITE);
+        drawString("Found " + loadedFiles.length + " file(s)", 10, 30);
+        
+        // Show current file
+        var y = 50;
+        var startIdx = Math.max(0, loadFileIndex - 2);
+        var endIdx = Math.min(loadedFiles.length, startIdx + 5);
+        
+        for (var i = startIdx; i < endIdx; i++) {
+            var fname = loadedFiles[i];
+            // Shorten filename for display
+            if (fname.length > 28) {
+                fname = ".." + fname.substring(fname.length - 26);
+            }
+            
+            if (i === loadFileIndex) {
+                drawFillRect(5, y - 2, screenWidth - 10, 14, GRAY);
+                setTextColor(CYAN);
+            } else {
+                setTextColor(WHITE);
+            }
+            drawString(fname, 10, y);
+            y += 16;
+        }
+    }
+    
+    setTextColor(YELLOW);
+    drawString("[PREV/NEXT] [SEL] Load [ESC]", 5, screenHeight - 12);
+}
+
+function handleLoadMenu() {
+    if (getEscPress()) {
+        appState = "menu";
+        drawMenu();
+        return;
+    }
+    
+    if (loadedFiles.length === 0) {
+        return;
+    }
+    
+    if (getPrevPress()) {
+        loadFileIndex--;
+        if (loadFileIndex < 0) loadFileIndex = loadedFiles.length - 1;
+        drawLoadMenu();
+        delay(150);
+    }
+    if (getNextPress()) {
+        loadFileIndex++;
+        if (loadFileIndex >= loadedFiles.length) loadFileIndex = 0;
+        drawLoadMenu();
+        delay(150);
+    }
+    if (getSelPress()) {
+        delay(200);
+        if (loadAndDecodeFile(loadedFiles[loadFileIndex])) {
+            // Successfully loaded and decoded - now in result state
+        } else {
+            drawLoadMenu();
+        }
+    }
+}
+
 function saveSignal() {
     if (!lastResult || !lastRawData) {
         drawMessage("No signal to save!", RED);
+        delay(1500);
         return;
     }
+    
+    drawMessage("Saving signal...", YELLOW);
+    
     var r = lastResult;
-    var ts = Date.now ? Date.now() : 0;
-    var filename = "/protopirate_" + r.proto.replace(/[\s\/]/g, "_") + "_" + ts + ".sub";
+    saveCounter++;
+    
+    // Create filename - use counter since Date.now may not work
+    var protoName = r.proto.replace(/[\s\/]/g, "_");
+    var filename = "pp_" + protoName + "_" + saveCounter + ".sub";
+    
+    // Build file content
     var content = "Filetype: Bruce SubGhz File\n";
     content += "Version: 1\n";
     content += "Frequency: " + Math.floor(frequency * 1000000) + "\n";
@@ -1032,13 +1200,49 @@ function saveSignal() {
     content += "# Serial: " + toHex(r.serial, 7) + " Button: " + r.btnName + "\n";
     content += "# Counter: " + toHex(r.counter, 4) + " CRC: " + (r.crcOk ? "OK" : "FAIL") + "\n";
     content += "RAW_Data: " + lastRawData + "\n";
-    try {
-        storage.write(filename, content);
-        drawMessage("Saved!\n" + filename, GREEN);
-    } catch (e) {
-        drawMessage("Save failed!", RED);
+    
+    var saved = false;
+    var savePath = "";
+    
+    // Try multiple paths
+    var paths = [
+        "/" + filename,
+        "/BruceRF/" + filename,
+        "/subghz/" + filename
+    ];
+    
+    for (var i = 0; i < paths.length; i++) {
+        try {
+            storage.write(paths[i], content);
+            saved = true;
+            savePath = paths[i];
+            break;
+        } catch (e) {
+            // Try next path
+        }
     }
-    delay(1500);
+    
+    if (saved) {
+        clearScreen();
+        setTextSize(2); setTextColor(GREEN);
+        drawString("SAVED!", 10, 5);
+        setTextSize(1); setTextColor(WHITE);
+        drawString("File: " + filename, 10, 35);
+        drawString("Path: " + savePath, 10, 50);
+        drawString("Proto: " + r.proto, 10, 70);
+        drawString("Serial: " + toHex(r.serial, 7), 10, 85);
+        setTextColor(YELLOW);
+        drawString("Press any key...", 10, screenHeight - 15);
+        delay(500);
+        // Wait for button press
+        while (!getSelPress() && !getEscPress() && !getPrevPress() && !getNextPress()) {
+            delay(50);
+        }
+    } else {
+        drawMessage("Save FAILED!\nCheck SD card", RED);
+        delay(2000);
+    }
+    
     drawResult(lastResult);
 }
 
@@ -1258,9 +1462,16 @@ function handleMenu() {
     if (getNextPress()) { menuIndex++; if (menuIndex >= menuItems.length) menuIndex = 0; drawMenu(); }
     if (getSelPress()) {
         if (menuIndex === 0) { setLongPress(true); appState = "receive"; drawReceive(); }
-        else if (menuIndex === 1) { appState = "freq"; drawFreqSelect(); }
-        else if (menuIndex === 2) { appState = "info"; drawInfo(); }
-        else if (menuIndex === 3) { appState = "exit"; }
+        else if (menuIndex === 1) { 
+            drawMessage("Scanning for files...", YELLOW);
+            scanForFiles();
+            loadFileIndex = 0;
+            appState = "load"; 
+            drawLoadMenu(); 
+        }
+        else if (menuIndex === 2) { appState = "freq"; drawFreqSelect(); }
+        else if (menuIndex === 3) { appState = "info"; drawInfo(); }
+        else if (menuIndex === 4) { appState = "exit"; }
     }
 }
 
@@ -1362,6 +1573,7 @@ while (appState !== "exit") {
     else if (appState === "result") handleResult();
     else if (appState === "info") handleInfo();
     else if (appState === "freq") handleFreqSelect();
+    else if (appState === "load") handleLoadMenu();
     delay(50);
 }
 
