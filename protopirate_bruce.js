@@ -1,7 +1,7 @@
 /**
  * ProtoPirate Car Key Decoder for Bruce Firmware 1.14+
  * Enhanced version with multi-protocol support
- * Protocols: Kia V0/V1/V2, Ford V0, Suzuki, StarLine, Scher-Khan, Subaru
+ * Protocols: Kia V0/V1/V2, Ford V0, Suzuki, StarLine, Scher-Khan, Subaru, Chrysler
  */
 
 var display = require('display');
@@ -40,11 +40,13 @@ var GRAY = color(80, 80, 80);
 
 // App state
 var menuIndex = 0;
-var menuItems = ["Receive Signal", "Protocol Info", "Exit"];
+var menuItems = ["Receive Signal", "Set Frequency", "Protocol Info", "Exit"];
 var appState = "menu";
 var lastResult = null;
 var lastRawData = "";
 var frequency = 433.92;
+var freqOptions = [315.0, 433.92, 868.35];
+var freqIndex = 1;  // Default to 433.92
 var resultMenuIndex = 0;
 
 // Protocol constants - Enhanced list
@@ -58,6 +60,7 @@ var PROTO_SCHERKHAN = { name: "Scher-Khan", te_short: 750, te_long: 1100, te_del
 var PROTO_SUBARU = { name: "Subaru", te_short: 800, te_long: 1600, te_delta: 200, min_bits: 64 };
 var PROTO_FIAT = { name: "Fiat V0", te_short: 200, te_long: 400, te_delta: 100, min_bits: 64 };
 var PROTO_KIA_V3V4 = { name: "Kia V3/V4", te_short: 400, te_long: 800, te_delta: 150, min_bits: 68 };
+var PROTO_CHRYSLER = { name: "Chrysler", te_short: 195, te_long: 390, te_delta: 80, min_bits: 64 };
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -134,6 +137,11 @@ function getButtonName(proto, btn) {
         if (btn === 1) return "Unlock";
         if (btn === 2) return "Lock";
         if (btn === 4) return "Boot";
+    } else if (proto === "Chrysler") {
+        if (btn === 1) return "Lock";
+        if (btn === 2) return "Unlock";
+        if (btn === 4) return "Trunk";
+        if (btn === 8) return "Panic";
     }
     return "Btn:" + toHex(btn, 2);
 }
@@ -790,6 +798,105 @@ function extractKiaV3V4(dataHi, dataLo, bitCount, isV3) {
 }
 
 // ============================================================================
+// CHRYSLER/TRW DECODER (64-bit KeeLoq @ 315 MHz)
+// ============================================================================
+
+function decodeChrysler(pulses) {
+    var p = PROTO_CHRYSLER;
+    var step = 0;
+    var syncCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    
+    // Chrysler uses: 50ms sync, then 56-bit command words
+    // PWM: short-long = 0, long-short = 1
+    // te_short ~195us, te_long ~390us
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            // Looking for sync - long pulse (part of 50ms sync)
+            if (level && dur > 1000) {
+                step = 1; syncCount = 1;
+            } else if (level && durMatch(dur, p.te_short, p.te_delta)) {
+                step = 2; teLast = dur;
+            }
+        } else if (step === 1) {
+            // After sync, look for data start
+            if (level && durMatch(dur, p.te_short, p.te_delta)) {
+                step = 2; teLast = dur;
+                dataHi = 0; dataLo = 0; bitCount = 0;
+            } else if (!level && dur > 1000) {
+                // Still in sync
+            } else if (level && dur > 1000) {
+                syncCount++;
+            } else {
+                step = 0;
+            }
+        } else if (step === 2) {
+            if (!level) {
+                // PWM decoding: short-long = 0, long-short = 1
+                if (durMatch(teLast, p.te_short, p.te_delta) && durMatch(dur, p.te_long, p.te_delta)) {
+                    // Bit 0
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = (dataLo << 1) >>> 0;
+                    bitCount++;
+                } else if (durMatch(teLast, p.te_long, p.te_delta) && durMatch(dur, p.te_short, p.te_delta)) {
+                    // Bit 1
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | 1) >>> 0;
+                    bitCount++;
+                } else if (dur > p.te_long * 3) {
+                    // End of transmission
+                    if (bitCount >= p.min_bits) {
+                        return extractChrysler(dataHi, dataLo, bitCount);
+                    }
+                    step = 0;
+                } else {
+                    step = 0;
+                }
+                
+                if (bitCount >= 66) {
+                    return extractChrysler(dataHi, dataLo, bitCount);
+                }
+            } else {
+                teLast = dur;
+            }
+        }
+    }
+    
+    if (bitCount >= p.min_bits) {
+        return extractChrysler(dataHi, dataLo, bitCount);
+    }
+    return null;
+}
+
+function extractChrysler(dataHi, dataLo, bitCount) {
+    // KeeLoq structure: [Encrypted 32-bit][Serial 28-bit][Button 4-bit]
+    // The encrypted portion contains the rolling code
+    var encrypted = dataHi;
+    var serial = (dataLo >>> 4) & 0x0FFFFFFF;
+    var button = dataLo & 0x0F;
+    
+    return {
+        proto: "Chrysler",
+        bits: bitCount,
+        dataHi: dataHi,
+        dataLo: dataLo,
+        serial: serial,
+        button: button,
+        btnName: getButtonName("Chrysler", button),
+        counter: encrypted & 0xFFFF,  // Display lower 16 bits of encrypted (visible counter)
+        crcOk: true,
+        encrypted: true
+    };
+}
+
+// ============================================================================
 // GENERIC PWM DECODER (Ford, Suzuki fallback)
 // ============================================================================
 
@@ -894,6 +1001,8 @@ function tryDecode(pulses) {
     result = decodeSubaru(pulses);
     if (result) return result;
     result = decodeFiatV0(pulses);
+    if (result) return result;
+    result = decodeChrysler(pulses);
     if (result) return result;
     result = decodeGenericPWM(pulses, PROTO_FORD);
     if (result) return result;
@@ -1046,7 +1155,7 @@ function drawMenu() {
     setTextSize(2); setTextColor(CYAN);
     drawString("ProtoPirate", 10, 5);
     setTextSize(1); setTextColor(WHITE);
-    drawString("Car Key Decoder v2.0", 10, 28);
+    drawString("Car Key Decoder v2.1", 10, 28);
     var y = 50;
     for (var i = 0; i < menuItems.length; i++) {
         if (i === menuIndex) {
@@ -1107,14 +1216,37 @@ function drawInfo() {
     drawString("Protocols", 10, 5);
     setTextSize(1); setTextColor(WHITE);
     var y = 28;
-    drawString("Kia V0/V1/V2/V3/V4", 10, y); y += 11;
-    drawString("Ford V0, Suzuki", 10, y); y += 11;
-    drawString("StarLine (64-bit)", 10, y); y += 11;
-    drawString("Scher-Khan (35-51 bit)", 10, y); y += 11;
-    drawString("Subaru (64-bit PWM)", 10, y); y += 11;
-    drawString("Fiat V0 (64-bit Man)", 10, y);
+    drawString("Kia V0/V1/V2/V3/V4", 10, y); y += 10;
+    drawString("Ford V0, Suzuki", 10, y); y += 10;
+    drawString("StarLine (64-bit)", 10, y); y += 10;
+    drawString("Scher-Khan (35-51 bit)", 10, y); y += 10;
+    drawString("Subaru (64-bit PWM)", 10, y); y += 10;
+    drawString("Fiat V0 (64-bit Man)", 10, y); y += 10;
+    drawString("Chrysler/Jeep (315MHz)", 10, y);
     setTextColor(YELLOW);
     drawString("[ESC] Back", 10, screenHeight - 12);
+}
+
+function drawFreqSelect() {
+    clearScreen();
+    setTextSize(2); setTextColor(CYAN);
+    drawString("Frequency", 10, 5);
+    setTextSize(1); setTextColor(WHITE);
+    drawString("Select operating frequency:", 10, 30);
+    var y = 55;
+    var freqLabels = ["315.00 MHz (US Chrysler)", "433.92 MHz (EU/Asia)", "868.35 MHz (EU)"];
+    for (var i = 0; i < freqOptions.length; i++) {
+        if (i === freqIndex) {
+            drawFillRect(5, y - 2, screenWidth - 10, 16, GRAY);
+            setTextColor(CYAN);
+        } else { setTextColor(WHITE); }
+        drawString(freqLabels[i], 15, y);
+        y += 20;
+    }
+    setTextColor(GREEN);
+    drawString("Current: " + frequency + " MHz", 10, 125);
+    setTextColor(YELLOW);
+    drawString("[PREV/NEXT] [SEL] Set [ESC] Back", 5, screenHeight - 12);
 }
 
 // ============================================================================
@@ -1126,8 +1258,23 @@ function handleMenu() {
     if (getNextPress()) { menuIndex++; if (menuIndex >= menuItems.length) menuIndex = 0; drawMenu(); }
     if (getSelPress()) {
         if (menuIndex === 0) { setLongPress(true); appState = "receive"; drawReceive(); }
-        else if (menuIndex === 1) { appState = "info"; drawInfo(); }
-        else if (menuIndex === 2) { appState = "exit"; }
+        else if (menuIndex === 1) { appState = "freq"; drawFreqSelect(); }
+        else if (menuIndex === 2) { appState = "info"; drawInfo(); }
+        else if (menuIndex === 3) { appState = "exit"; }
+    }
+}
+
+function handleFreqSelect() {
+    if (getEscPress()) { appState = "menu"; drawMenu(); return; }
+    if (getPrevPress()) { freqIndex--; if (freqIndex < 0) freqIndex = freqOptions.length - 1; drawFreqSelect(); }
+    if (getNextPress()) { freqIndex++; if (freqIndex >= freqOptions.length) freqIndex = 0; drawFreqSelect(); }
+    if (getSelPress()) {
+        frequency = freqOptions[freqIndex];
+        subghz.setFrequency(frequency);
+        drawMessage("Frequency set to\n" + frequency + " MHz", GREEN);
+        delay(1000);
+        appState = "menu";
+        drawMenu();
     }
 }
 
@@ -1176,7 +1323,7 @@ clearScreen();
 setTextSize(2); setTextColor(CYAN);
 drawString("ProtoPirate", 30, screenHeight/2 - 15);
 setTextSize(1); setTextColor(WHITE);
-drawString("Car Key Decoder v2.0", 25, screenHeight/2 + 10);
+drawString("Car Key Decoder v2.1", 25, screenHeight/2 + 10);
 delay(1500);
 
 subghz.setFrequency(frequency);
@@ -1187,6 +1334,7 @@ while (appState !== "exit") {
     else if (appState === "receive") handleReceive();
     else if (appState === "result") handleResult();
     else if (appState === "info") handleInfo();
+    else if (appState === "freq") handleFreqSelect();
     delay(50);
 }
 
