@@ -60,7 +60,7 @@ var PROTO_SCHERKHAN = { name: "Scher-Khan", te_short: 750, te_long: 1100, te_del
 var PROTO_SUBARU = { name: "Subaru", te_short: 800, te_long: 1600, te_delta: 200, min_bits: 64 };
 var PROTO_FIAT = { name: "Fiat V0", te_short: 200, te_long: 400, te_delta: 100, min_bits: 64 };
 var PROTO_KIA_V3V4 = { name: "Kia V3/V4", te_short: 400, te_long: 800, te_delta: 150, min_bits: 68 };
-var PROTO_CHRYSLER = { name: "Chrysler", te_short: 195, te_long: 390, te_delta: 80, min_bits: 64 };
+var PROTO_CHRYSLER = { name: "Chrysler", te_short: 200, te_long: 400, te_delta: 120, min_bits: 64 };
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -810,53 +810,67 @@ function decodeChrysler(pulses) {
     var dataLo = 0;
     var bitCount = 0;
     
-    // Chrysler uses: 50ms sync, then 56-bit command words
-    // PWM: short-long = 0, long-short = 1
-    // te_short ~195us, te_long ~390us
+    // Chrysler/Jeep/Dodge uses PWM encoding
+    // te_short ~200us, te_long ~400us (with wide tolerance)
+    // Some models have preamble, some don't
     
     for (var i = 0; i < pulses.length; i++) {
         var level = pulses[i] > 0;
         var dur = abs(pulses[i]);
         
         if (step === 0) {
-            // Looking for sync - long pulse (part of 50ms sync)
-            if (level && dur > 1000) {
+            // Looking for data start - accept short pulse or long sync
+            if (level && dur > 500) {
                 step = 1; syncCount = 1;
-            } else if (level && durMatch(dur, p.te_short, p.te_delta)) {
+            } else if (level && dur >= 80 && dur <= 350) {
                 step = 2; teLast = dur;
+                dataHi = 0; dataLo = 0; bitCount = 0;
             }
         } else if (step === 1) {
             // After sync, look for data start
-            if (level && durMatch(dur, p.te_short, p.te_delta)) {
+            if (level && dur >= 80 && dur <= 350) {
                 step = 2; teLast = dur;
                 dataHi = 0; dataLo = 0; bitCount = 0;
-            } else if (!level && dur > 1000) {
+            } else if (!level && dur > 500) {
                 // Still in sync
-            } else if (level && dur > 1000) {
+            } else if (level && dur > 500) {
                 syncCount++;
             } else {
                 step = 0;
             }
         } else if (step === 2) {
             if (!level) {
-                // PWM decoding: short-long = 0, long-short = 1
-                if (durMatch(teLast, p.te_short, p.te_delta) && durMatch(dur, p.te_long, p.te_delta)) {
+                var isShortShort = (teLast >= 80 && teLast <= 300) && (dur >= 80 && dur <= 300);
+                var isShortLong = (teLast >= 80 && teLast <= 300) && (dur >= 280 && dur <= 550);
+                var isLongShort = (teLast >= 280 && teLast <= 550) && (dur >= 80 && dur <= 300);
+                var isLongLong = (teLast >= 280 && teLast <= 550) && (dur >= 280 && dur <= 550);
+                
+                if (isShortLong) {
                     // Bit 0
                     dataHi = (dataHi << 1) | (dataLo >>> 31);
                     dataLo = (dataLo << 1) >>> 0;
                     bitCount++;
-                } else if (durMatch(teLast, p.te_long, p.te_delta) && durMatch(dur, p.te_short, p.te_delta)) {
+                    step = 2;
+                } else if (isLongShort) {
                     // Bit 1
                     dataHi = (dataHi << 1) | (dataLo >>> 31);
                     dataLo = ((dataLo << 1) | 1) >>> 0;
                     bitCount++;
-                } else if (dur > p.te_long * 3) {
+                    step = 2;
+                } else if (dur > 600) {
                     // End of transmission
-                    if (bitCount >= p.min_bits) {
+                    if (bitCount >= 56) {
                         return extractChrysler(dataHi, dataLo, bitCount);
                     }
                     step = 0;
+                } else if (isShortShort || isLongLong) {
+                    // Preamble or invalid - keep trying
+                    step = 2;
                 } else {
+                    // Unknown pattern - check if we have enough bits
+                    if (bitCount >= 56) {
+                        return extractChrysler(dataHi, dataLo, bitCount);
+                    }
                     step = 0;
                 }
                 
@@ -869,7 +883,7 @@ function decodeChrysler(pulses) {
         }
     }
     
-    if (bitCount >= p.min_bits) {
+    if (bitCount >= 56) {
         return extractChrysler(dataHi, dataLo, bitCount);
     }
     return null;
