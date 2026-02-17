@@ -1,4 +1,3 @@
-[PROTOPIRATE_BRUCE_README.md](https://github.com/user-attachments/files/25358167/PROTOPIRATE_BRUCE_README.md)
 # ProtoPirate for Bruce Firmware
 
 A JavaScript port of the ProtoPirate car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**.
@@ -6,9 +5,9 @@ A JavaScript port of the ProtoPirate car key fob decoder for the **Lilygo T-Embe
 ## Features
 
 - **Real-time signal capture and decoding** using the CC1101 radio
-- **Multi-protocol support** - automatically detects and decodes car key protocols
+- **Enhanced multi-protocol support** - automatically detects and decodes 10+ car key protocols
 - **Rolling code transmission** - increment counter, recalculate CRC, and transmit
-- **CRC validation** - verifies signal integrity (Kia V0 fully implemented)
+- **CRC validation** - verifies signal integrity (Kia V0/V1/V2 fully implemented)
 - **Save decoded signals** - stores to .sub files compatible with Bruce/Flipper
 - **Pure JavaScript** - runs on Bruce's built-in JS interpreter, no compilation needed
 
@@ -17,10 +16,15 @@ A JavaScript port of the ProtoPirate car key fob decoder for the **Lilygo T-Embe
 | Protocol | Bits | Encoding | Decode | TX Rolling Code |
 |----------|------|----------|--------|----------------|
 | Kia V0 | 61 | PWM | ✅ | ✅ Full CRC |
+| Kia V1 | 57 | Manchester | ✅ | ✅ CRC-4 |
+| Kia V2 | 53 | Manchester | ✅ | ✅ CRC-4 |
+| Kia V3/V4 | 68 | PWM/KeeLoq | ✅ | ⚠️ Encrypted |
 | Ford V0 | 64 | Manchester | ✅ | ⚠️ Decode only |
 | Suzuki | 64 | PWM | ✅ | ⚠️ Decode only |
 | StarLine | 64 | PWM | ✅ | ⚠️ Decode only |
-| Scher-Khan | 35 | PWM | ✅ | ⚠️ Decode only |
+| Scher-Khan | 35-51 | PWM | ✅ | ⚠️ Decode only |
+| Subaru | 64 | PWM | ✅ | ⚠️ Decode only |
+| Fiat V0 | 64 | Manchester | ✅ | ⚠️ Decode only |
 
 *More protocols can be added by implementing their CRC algorithms*
 
@@ -231,6 +235,15 @@ function kiaCrc8(bytes) {
 - **Bruce Firmware**: [GitHub](https://github.com/pr3y/Bruce)
 
 ## Version History
+
+### v2.0
+- Added Kia V1, V2, V3/V4 protocol decoders
+- Added Subaru protocol decoder (64-bit PWM)
+- Added Fiat V0 protocol decoder (64-bit Manchester)
+- Enhanced Scher-Khan decoder (35-51 bit support, MAGIC CODE detection)
+- CRC validation for Kia V1 (CRC-4) and Kia V2
+- Improved protocol detection and auto-identification
+- UI improvements and version bump
 
 ### v1.1
 - Added rolling code transmission with counter increment
