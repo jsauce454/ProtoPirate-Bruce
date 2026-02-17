@@ -984,6 +984,20 @@ function extractRawData(content) {
     return content.substring(start, end);
 }
 
+function extractFrequency(content) {
+    var idx = content.indexOf("Frequency:");
+    if (idx < 0) return null;
+    var start = idx + 10;
+    var end = content.indexOf("\n", start);
+    if (end < 0) end = content.length;
+    var freqStr = content.substring(start, end).trim();
+    var freqHz = parseInt(freqStr, 10);
+    if (freqHz > 0) {
+        return freqHz / 1000000;  // Convert Hz to MHz
+    }
+    return null;
+}
+
 function tryDecode(pulses) {
     var result;
     result = decodeKiaV0(pulses);
@@ -1058,6 +1072,13 @@ function loadAndDecodeFile(filepath) {
             drawMessage("File empty or\ntoo small!", RED);
             delay(1500);
             return false;
+        }
+        
+        // Extract frequency from file
+        var fileFreq = extractFrequency(content);
+        if (fileFreq) {
+            frequency = fileFreq;
+            subghz.setFrequency(frequency);
         }
         
         // Extract RAW_Data from file
@@ -1392,7 +1413,7 @@ function drawResult(r) {
     setTextSize(2); setTextColor(GREEN);
     drawString("DECODED!", 10, 5);
     setTextSize(1); setTextColor(CYAN);
-    drawString(r.proto + " " + r.bits + "-bit", 10, 28);
+    drawString(r.proto + " " + r.bits + "-bit @ " + frequency + "MHz", 10, 28);
     setTextColor(WHITE);
     var y = 42;
     drawString("Key: " + toHex(r.dataHi, 8) + toHex(r.dataLo, 8), 10, y); y += 12;
