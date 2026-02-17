@@ -1531,7 +1531,27 @@ function handleReceive() {
                     delay(500);
                     getPrevPress(); getNextPress(); getSelPress(); getEscPress();
                     return;
+                } else {
+                    // Signal captured but protocol not recognized
+                    clearScreen();
+                    setTextSize(1); setTextColor(YELLOW);
+                    drawString("Signal captured!", 10, 10);
+                    drawString("Pulses: " + pulses.length, 10, 25);
+                    setTextColor(RED);
+                    drawString("Unknown protocol", 10, 45);
+                    setTextColor(WHITE);
+                    drawString("Try pressing key again", 10, 65);
+                    drawString("or check frequency", 10, 80);
+                    setTextColor(YELLOW);
+                    drawString("[ESC] Back", 10, screenHeight - 12);
+                    delay(2000);
+                    drawReceive();
                 }
+            } else if (pulses.length > 0) {
+                // Too few pulses - weak signal
+                setTextColor(YELLOW);
+                drawFillRect(10, 50, 150, 12, BLACK);
+                drawString("Weak: " + pulses.length + " pulses", 10, 50);
             }
         }
     }
