@@ -1,6 +1,7 @@
 /**
- * ProtoPirate Car Key Decoder for Bruce Firmware 1.14
- * Simplified version following Bruce JS API patterns
+ * ProtoPirate Car Key Decoder for Bruce Firmware 1.14+
+ * Enhanced version with multi-protocol support
+ * Protocols: Kia V0/V1/V2, Ford V0, Suzuki, StarLine, Scher-Khan, Subaru
  */
 
 var display = require('display');
@@ -42,14 +43,21 @@ var menuIndex = 0;
 var menuItems = ["Receive Signal", "Protocol Info", "Exit"];
 var appState = "menu";
 var lastResult = null;
-var lastRawData = "";  // Store raw pulse data for replay
+var lastRawData = "";
 var frequency = 433.92;
 var resultMenuIndex = 0;
 
-// Protocol constants
+// Protocol constants - Enhanced list
 var PROTO_KIA_V0 = { name: "Kia V0", te_short: 250, te_long: 500, te_delta: 100, min_bits: 61 };
+var PROTO_KIA_V1 = { name: "Kia V1", te_short: 800, te_long: 1600, te_delta: 200, min_bits: 57 };
+var PROTO_KIA_V2 = { name: "Kia V2", te_short: 500, te_long: 1000, te_delta: 150, min_bits: 53 };
 var PROTO_FORD = { name: "Ford V0", te_short: 250, te_long: 500, te_delta: 100, min_bits: 64 };
 var PROTO_SUZUKI = { name: "Suzuki", te_short: 250, te_long: 500, te_delta: 100, min_bits: 64 };
+var PROTO_STARLINE = { name: "StarLine", te_short: 250, te_long: 500, te_delta: 120, min_bits: 64 };
+var PROTO_SCHERKHAN = { name: "Scher-Khan", te_short: 750, te_long: 1100, te_delta: 160, min_bits: 35 };
+var PROTO_SUBARU = { name: "Subaru", te_short: 800, te_long: 1600, te_delta: 200, min_bits: 64 };
+var PROTO_FIAT = { name: "Fiat V0", te_short: 200, te_long: 400, te_delta: 100, min_bits: 64 };
+var PROTO_KIA_V3V4 = { name: "Kia V3/V4", te_short: 400, te_long: 800, te_delta: 150, min_bits: 68 };
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -81,8 +89,57 @@ function kiaCrc8(bytes) {
     return crc;
 }
 
+// CRC4 for Kia V1
+function kiaV1Crc4(bytes, count, offset) {
+    var crc = 0;
+    for (var i = 0; i < count; i++) {
+        var b = bytes[i];
+        crc ^= ((b & 0x0F) ^ (b >> 4));
+    }
+    crc = (crc + offset) & 0x0F;
+    return crc;
+}
+
+// CRC for Kia V2
+function kiaV2CalculateCrc(data) {
+    var bytes = [];
+    var dataWithoutCrc = data >>> 4;
+    for (var i = 0; i < 6; i++) {
+        bytes[i] = (dataWithoutCrc >>> (i * 8)) & 0xFF;
+    }
+    var crc = 0;
+    for (var i = 0; i < 6; i++) {
+        crc ^= (bytes[i] & 0x0F) ^ (bytes[i] >> 4);
+    }
+    return (crc + 1) & 0x0F;
+}
+
+// Button name lookup
+function getButtonName(proto, btn) {
+    if (proto === "Kia V0" || proto === "Kia V1" || proto === "Kia V2" || proto === "Kia V3/V4") {
+        if (btn === 1) return "Lock";
+        if (btn === 2) return "Unlock";
+        if (btn === 3) return "Trunk";
+        if (btn === 4) return "Panic";
+    } else if (proto === "Ford V0") {
+        if (btn === 1) return "Lock";
+        if (btn === 2) return "Unlock";
+        if (btn === 4) return "Boot";
+    } else if (proto === "Subaru") {
+        if (btn === 1) return "Lock";
+        if (btn === 2) return "Unlock";
+        if (btn === 4) return "Trunk";
+        if (btn === 8) return "Panic";
+    } else if (proto === "Fiat V0") {
+        if (btn === 1) return "Unlock";
+        if (btn === 2) return "Lock";
+        if (btn === 4) return "Boot";
+    }
+    return "Btn:" + toHex(btn, 2);
+}
+
 // ============================================================================
-// KIA V0 DECODER
+// KIA V0 DECODER (61-bit PWM)
 // ============================================================================
 
 function decodeKiaV0(pulses) {
@@ -152,21 +209,588 @@ function extractKiaV0(dataHi, dataLo, bitCount) {
     ];
     var calcCrc = kiaCrc8(crcBytes);
     
-    var btnName = "Unknown";
-    if (button === 1) btnName = "Lock";
-    else if (button === 2) btnName = "Unlock";
-    else if (button === 3) btnName = "Trunk";
-    else if (button === 4) btnName = "Panic";
-    
     return {
         proto: "Kia V0", bits: bitCount, dataHi: dataHi, dataLo: dataLo,
-        serial: serial, button: button, btnName: btnName, counter: counter,
-        crcOk: (rxCrc === calcCrc)
+        serial: serial, button: button, btnName: getButtonName("Kia V0", button),
+        counter: counter, crcOk: (rxCrc === calcCrc)
     };
 }
 
 // ============================================================================
-// GENERIC PWM DECODER
+// KIA V1 DECODER (57-bit Manchester)
+// ============================================================================
+
+function decodeKiaV1(pulses) {
+    var p = PROTO_KIA_V1;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    var manchesterState = 0;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_long, p.te_delta)) {
+                step = 1; teLast = dur; headerCount = 0;
+            }
+        } else if (step === 1) {
+            if (!level && durMatch(dur, p.te_long, p.te_delta) && durMatch(teLast, p.te_long, p.te_delta)) {
+                headerCount++;
+            } else if (level && durMatch(dur, p.te_long, p.te_delta)) {
+                teLast = dur;
+            } else if (!level && durMatch(dur, p.te_short, p.te_delta) && headerCount > 70) {
+                step = 2;
+                dataHi = 0; dataLo = 1; bitCount = 1;
+            } else {
+                step = 0;
+            }
+        } else if (step === 2) {
+            var isShort = durMatch(dur, p.te_short, p.te_delta);
+            var isLong = durMatch(dur, p.te_long, p.te_delta);
+            
+            if (isShort || isLong) {
+                if (isShort) {
+                    manchesterState++;
+                    if (manchesterState === 2) {
+                        dataHi = (dataHi << 1) | (dataLo >>> 31);
+                        dataLo = ((dataLo << 1) | (level ? 0 : 1)) >>> 0;
+                        bitCount++;
+                        manchesterState = 0;
+                    }
+                } else if (isLong) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | (level ? 0 : 1)) >>> 0;
+                    bitCount++;
+                    manchesterState = 0;
+                }
+                
+                if (bitCount >= p.min_bits) {
+                    return extractKiaV1(dataHi, dataLo, bitCount);
+                }
+            } else {
+                step = 0;
+            }
+        }
+    }
+    return null;
+}
+
+function extractKiaV1(dataHi, dataLo, bitCount) {
+    var serial = dataLo >>> 24;
+    serial = (serial << 24) | ((dataHi & 0xFF) << 16) | ((dataHi >>> 8) & 0xFF00) | ((dataHi >>> 16) & 0xFF);
+    var button = (dataLo >>> 16) & 0xFF;
+    var counter = ((dataLo >>> 4) & 0xF) << 8 | ((dataLo >>> 8) & 0xFF);
+    var rxCrc = dataLo & 0xF;
+    
+    var cntHigh = (counter >>> 8) & 0xF;
+    var charData = [
+        (serial >>> 24) & 0xFF, (serial >>> 16) & 0xFF,
+        (serial >>> 8) & 0xFF, serial & 0xFF,
+        button, counter & 0xFF
+    ];
+    
+    var offset = 1;
+    if (cntHigh === 0 && counter >= 0x98) offset = button;
+    var calcCrc = kiaV1Crc4(charData, 6, offset);
+    
+    return {
+        proto: "Kia V1", bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial & 0xFFFFFF, button: button, btnName: getButtonName("Kia V1", button),
+        counter: counter, crcOk: (rxCrc === calcCrc)
+    };
+}
+
+// ============================================================================
+// KIA V2 DECODER (53-bit Manchester)
+// ============================================================================
+
+function decodeKiaV2(pulses) {
+    var p = PROTO_KIA_V2;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_long, p.te_delta)) {
+                step = 1; teLast = dur; headerCount = 0;
+            }
+        } else if (step === 1) {
+            if (level && durMatch(dur, p.te_long, p.te_delta)) {
+                teLast = dur; headerCount++;
+            } else if (!level && durMatch(dur, p.te_long, p.te_delta)) {
+                headerCount++;
+            } else if (level && durMatch(dur, p.te_short, p.te_delta) && headerCount >= 100) {
+                step = 2;
+                dataHi = 0; dataLo = 1; bitCount = 1;
+            } else {
+                step = 0;
+            }
+        } else if (step === 2) {
+            var isShort = durMatch(dur, p.te_short, p.te_delta);
+            var isLong = durMatch(dur, p.te_long, p.te_delta);
+            
+            if (isShort || isLong) {
+                if (isLong) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | (level ? 0 : 1)) >>> 0;
+                    bitCount++;
+                }
+                
+                if (bitCount >= p.min_bits) {
+                    return extractKiaV2(dataHi, dataLo, bitCount);
+                }
+            } else {
+                step = 0;
+            }
+        }
+    }
+    return null;
+}
+
+function extractKiaV2(dataHi, dataLo, bitCount) {
+    var serial = (dataLo >>> 20) & 0xFFFFFFFF;
+    var button = (dataLo >>> 16) & 0x0F;
+    var rawCount = (dataLo >>> 4) & 0xFFF;
+    var counter = ((rawCount >>> 4) | (rawCount << 8)) & 0xFFF;
+    var rxCrc = dataLo & 0x0F;
+    
+    var calcCrc = kiaV2CalculateCrc(dataLo);
+    
+    return {
+        proto: "Kia V2", bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial, button: button, btnName: getButtonName("Kia V2", button),
+        counter: counter, crcOk: (rxCrc === calcCrc)
+    };
+}
+
+// ============================================================================
+// STARLINE DECODER (64-bit PWM)
+// ============================================================================
+
+function decodeStarLine(pulses) {
+    var p = PROTO_STARLINE;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_long * 2, p.te_delta * 2)) {
+                step = 1; headerCount = 1;
+            }
+        } else if (step === 1) {
+            if (!level && durMatch(dur, p.te_long * 2, p.te_delta * 2)) {
+                step = 0;
+            } else if (level && headerCount > 4) {
+                dataHi = 0; dataLo = 0; bitCount = 0;
+                teLast = dur; step = 2;
+            } else if (level && durMatch(dur, p.te_long * 2, p.te_delta * 2)) {
+                headerCount++;
+            }
+        } else if (step === 2) {
+            if (!level) {
+                if (durMatch(teLast, p.te_short, p.te_delta) && durMatch(dur, p.te_short, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = (dataLo << 1) >>> 0;
+                    bitCount++;
+                } else if (durMatch(teLast, p.te_long, p.te_delta) && durMatch(dur, p.te_long, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | 1) >>> 0;
+                    bitCount++;
+                }
+                
+                if (bitCount >= p.min_bits) {
+                    return extractStarLine(dataHi, dataLo, bitCount);
+                }
+            }
+            if (level) teLast = dur;
+        }
+    }
+    return null;
+}
+
+function extractStarLine(dataHi, dataLo, bitCount) {
+    var revHi = 0, revLo = 0;
+    for (var i = 0; i < 32; i++) {
+        revLo = (revLo << 1) | ((dataHi >>> i) & 1);
+        revHi = (revHi << 1) | ((dataLo >>> i) & 1);
+    }
+    
+    var serial = revHi & 0x00FFFFFF;
+    var button = revHi >>> 24;
+    
+    return {
+        proto: "StarLine", bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial, button: button, btnName: getButtonName("StarLine", button),
+        counter: revLo & 0xFFFF, crcOk: true
+    };
+}
+
+// ============================================================================
+// SCHER-KHAN DECODER (35-51 bit PWM)
+// ============================================================================
+
+function decodeScherKhan(pulses) {
+    var p = PROTO_SCHERKHAN;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_short * 2, p.te_delta)) {
+                step = 1; teLast = dur; headerCount = 0;
+            }
+        } else if (step === 1) {
+            if (level) {
+                if (durMatch(dur, p.te_short * 2, p.te_delta) || durMatch(dur, p.te_short, p.te_delta)) {
+                    teLast = dur;
+                } else { step = 0; }
+            } else {
+                if (durMatch(dur, p.te_short * 2, p.te_delta) || durMatch(dur, p.te_short, p.te_delta)) {
+                    if (durMatch(teLast, p.te_short * 2, p.te_delta)) {
+                        headerCount++;
+                    } else if (durMatch(teLast, p.te_short, p.te_delta) && headerCount >= 2) {
+                        step = 2;
+                        dataHi = 0; dataLo = 0; bitCount = 1;
+                    } else { step = 0; }
+                } else { step = 0; }
+            }
+        } else if (step === 2) {
+            if (level) {
+                if (dur >= (p.te_delta * 2 + p.te_long)) {
+                    if (bitCount >= p.min_bits) {
+                        return extractScherKhan(dataHi, dataLo, bitCount);
+                    }
+                    step = 0;
+                } else {
+                    teLast = dur; step = 3;
+                }
+            } else { step = 0; }
+        } else if (step === 3) {
+            if (!level) {
+                if (durMatch(teLast, p.te_short, p.te_delta) && durMatch(dur, p.te_short, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = (dataLo << 1) >>> 0;
+                    bitCount++; step = 2;
+                } else if (durMatch(teLast, p.te_long, p.te_delta) && durMatch(dur, p.te_long, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | 1) >>> 0;
+                    bitCount++; step = 2;
+                } else { step = 0; }
+            } else { step = 0; }
+        }
+    }
+    return null;
+}
+
+function extractScherKhan(dataHi, dataLo, bitCount) {
+    var protoName = "Scher-Khan";
+    var serial = 0, button = 0, counter = 0;
+    
+    if (bitCount === 51) {
+        protoName = "MAGIC CODE";
+        serial = ((dataLo >>> 24) & 0xFFFFFF0) | ((dataLo >>> 20) & 0x0F);
+        button = (dataLo >>> 24) & 0x0F;
+        counter = dataLo & 0xFFFF;
+    } else if (bitCount === 35) {
+        protoName = "MAGIC Static";
+    }
+    
+    return {
+        proto: protoName, bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial, button: button, btnName: getButtonName("Scher-Khan", button),
+        counter: counter, crcOk: true
+    };
+}
+
+// ============================================================================
+// SUBARU DECODER (64-bit PWM)
+// ============================================================================
+
+function decodeSubaru(pulses) {
+    var p = PROTO_SUBARU;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_long, p.te_delta)) {
+                step = 1; teLast = dur; headerCount = 1;
+            }
+        } else if (step === 1) {
+            if (!level && durMatch(dur, p.te_long, p.te_delta)) {
+                headerCount++;
+            } else if (level && durMatch(dur, p.te_long, p.te_delta)) {
+                teLast = dur; headerCount++;
+            } else if (!level && dur > 2000 && dur < 3500 && headerCount > 20) {
+                step = 2;
+            } else {
+                step = 0;
+            }
+        } else if (step === 2) {
+            if (level && dur > 2000 && dur < 3500) {
+                step = 3;
+            } else {
+                step = 0;
+            }
+        } else if (step === 3) {
+            if (!level && durMatch(dur, p.te_long, p.te_delta)) {
+                step = 4;
+                dataHi = 0; dataLo = 0; bitCount = 0;
+            } else {
+                step = 0;
+            }
+        } else if (step === 4) {
+            if (level) {
+                if (durMatch(dur, p.te_short, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | 1) >>> 0;
+                    bitCount++;
+                } else if (durMatch(dur, p.te_long, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = (dataLo << 1) >>> 0;
+                    bitCount++;
+                } else if (dur > 3000 && bitCount >= p.min_bits) {
+                    return extractSubaru(dataHi, dataLo, bitCount);
+                }
+                
+                if (bitCount >= p.min_bits) {
+                    return extractSubaru(dataHi, dataLo, bitCount);
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function extractSubaru(dataHi, dataLo, bitCount) {
+    var b0 = (dataHi >>> 24) & 0xFF;
+    var b1 = (dataHi >>> 16) & 0xFF;
+    var b2 = (dataHi >>> 8) & 0xFF;
+    var b3 = dataHi & 0xFF;
+    
+    var serial = (b1 << 16) | (b2 << 8) | b3;
+    var button = b0 & 0x0F;
+    
+    return {
+        proto: "Subaru", bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial, button: button, btnName: getButtonName("Subaru", button),
+        counter: dataLo & 0xFFFF, crcOk: true
+    };
+}
+
+// ============================================================================
+// FIAT V0 DECODER (64-bit Manchester)
+// ============================================================================
+
+function decodeFiatV0(pulses) {
+    var p = PROTO_FIAT;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    var manchesterState = 0;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_short, p.te_delta)) {
+                step = 1; teLast = dur; headerCount = 0;
+            }
+        } else if (step === 1) {
+            if (level) {
+                teLast = dur;
+            } else {
+                if (durMatch(dur, p.te_short, p.te_delta) && durMatch(teLast, p.te_short, p.te_delta)) {
+                    headerCount++;
+                } else if (dur > 600 && dur < 1000 && headerCount >= 100) {
+                    step = 2;
+                    dataHi = 0; dataLo = 0; bitCount = 0;
+                    manchesterState = 0;
+                } else {
+                    step = 0;
+                }
+            }
+        } else if (step === 2) {
+            var isShort = durMatch(dur, p.te_short, p.te_delta);
+            var isLong = durMatch(dur, p.te_long, p.te_delta);
+            
+            if (isShort || isLong) {
+                if (isShort) {
+                    manchesterState++;
+                    if (manchesterState === 2) {
+                        dataHi = (dataHi << 1) | (dataLo >>> 31);
+                        dataLo = ((dataLo << 1) | (level ? 0 : 1)) >>> 0;
+                        bitCount++;
+                        manchesterState = 0;
+                    }
+                } else if (isLong) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | (level ? 0 : 1)) >>> 0;
+                    bitCount++;
+                    manchesterState = 0;
+                }
+                
+                if (bitCount >= p.min_bits) {
+                    return extractFiatV0(dataHi, dataLo, bitCount);
+                }
+            } else {
+                if (bitCount >= p.min_bits) {
+                    return extractFiatV0(dataHi, dataLo, bitCount);
+                }
+                step = 0;
+            }
+        }
+    }
+    return null;
+}
+
+function extractFiatV0(dataHi, dataLo, bitCount) {
+    var counter = dataHi;
+    var serial = dataLo;
+    var button = 0;
+    
+    return {
+        proto: "Fiat V0", bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial, button: button, btnName: getButtonName("Fiat V0", button),
+        counter: counter, crcOk: true
+    };
+}
+
+// ============================================================================
+// KIA V3/V4 DECODER (68-bit PWM with KeeLoq - raw capture only)
+// ============================================================================
+
+function decodeKiaV3V4(pulses) {
+    var p = PROTO_KIA_V3V4;
+    var step = 0;
+    var headerCount = 0;
+    var teLast = 0;
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    var isV3 = false;
+    
+    for (var i = 0; i < pulses.length; i++) {
+        var level = pulses[i] > 0;
+        var dur = abs(pulses[i]);
+        
+        if (step === 0) {
+            if (level && durMatch(dur, p.te_short, p.te_delta)) {
+                step = 1; teLast = dur; headerCount = 1;
+            }
+        } else if (step === 1) {
+            if (level) {
+                if (durMatch(dur, p.te_short, p.te_delta)) {
+                    teLast = dur;
+                } else if (dur > 1000 && dur < 1500) {
+                    if (headerCount >= 8) {
+                        isV3 = false;
+                        step = 2;
+                        dataHi = 0; dataLo = 0; bitCount = 0;
+                    } else { step = 0; }
+                } else { step = 0; }
+            } else {
+                if (dur > 1000 && dur < 1500) {
+                    if (headerCount >= 8) {
+                        isV3 = true;
+                        step = 2;
+                        dataHi = 0; dataLo = 0; bitCount = 0;
+                    } else { step = 0; }
+                } else if (durMatch(dur, p.te_short, p.te_delta) && durMatch(teLast, p.te_short, p.te_delta)) {
+                    headerCount++;
+                } else { step = 0; }
+            }
+        } else if (step === 2) {
+            if (level) {
+                if (dur > 1000 && dur < 1500) {
+                    if (bitCount >= p.min_bits) {
+                        return extractKiaV3V4(dataHi, dataLo, bitCount, isV3);
+                    }
+                    step = 0;
+                } else if (durMatch(dur, p.te_short, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = (dataLo << 1) >>> 0;
+                    bitCount++;
+                } else if (durMatch(dur, p.te_long, p.te_delta)) {
+                    dataHi = (dataHi << 1) | (dataLo >>> 31);
+                    dataLo = ((dataLo << 1) | 1) >>> 0;
+                    bitCount++;
+                } else { step = 0; }
+                
+                if (bitCount >= p.min_bits + 4) {
+                    return extractKiaV3V4(dataHi, dataLo, bitCount, isV3);
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function reverse8(b) {
+    b = ((b & 0xF0) >>> 4) | ((b & 0x0F) << 4);
+    b = ((b & 0xCC) >>> 2) | ((b & 0x33) << 2);
+    b = ((b & 0xAA) >>> 1) | ((b & 0x55) << 1);
+    return b & 0xFF;
+}
+
+function extractKiaV3V4(dataHi, dataLo, bitCount, isV3) {
+    var protoName = isV3 ? "Kia V3" : "Kia V4";
+    
+    var b4 = (dataLo >>> 24) & 0xFF;
+    var b5 = (dataLo >>> 16) & 0xFF;
+    var b6 = (dataLo >>> 8) & 0xFF;
+    var b7 = dataLo & 0xFF;
+    
+    var serial = ((reverse8(b7) & 0xF0) << 20) | (reverse8(b6) << 16) | (reverse8(b5) << 8) | reverse8(b4);
+    serial = serial & 0x0FFFFFFF;
+    var button = (reverse8(b7) & 0xF0) >>> 4;
+    
+    return {
+        proto: protoName, bits: bitCount, dataHi: dataHi, dataLo: dataLo,
+        serial: serial, button: button, btnName: getButtonName("Kia V3/V4", button),
+        counter: 0, crcOk: true, encrypted: true
+    };
+}
+
+// ============================================================================
+// GENERIC PWM DECODER (Ford, Suzuki fallback)
 // ============================================================================
 
 function decodeGenericPWM(pulses, proto) {
@@ -201,7 +825,8 @@ function decodeGenericPWM(pulses, proto) {
                         return {
                             proto: p.name, bits: bitCount, dataHi: dataHi, dataLo: dataLo,
                             serial: (dataLo >>> 16) & 0xFFFFFF, button: (dataLo >>> 8) & 0xFF,
-                            btnName: "Unknown", counter: dataLo & 0xFF, crcOk: true
+                            btnName: getButtonName(p.name, (dataLo >>> 8) & 0xFF),
+                            counter: dataLo & 0xFF, crcOk: true
                         };
                     }
                     step = 0;
@@ -253,7 +878,22 @@ function extractRawData(content) {
 }
 
 function tryDecode(pulses) {
-    var result = decodeKiaV0(pulses);
+    var result;
+    result = decodeKiaV0(pulses);
+    if (result) return result;
+    result = decodeKiaV1(pulses);
+    if (result) return result;
+    result = decodeKiaV2(pulses);
+    if (result) return result;
+    result = decodeKiaV3V4(pulses);
+    if (result) return result;
+    result = decodeStarLine(pulses);
+    if (result) return result;
+    result = decodeScherKhan(pulses);
+    if (result) return result;
+    result = decodeSubaru(pulses);
+    if (result) return result;
+    result = decodeFiatV0(pulses);
     if (result) return result;
     result = decodeGenericPWM(pulses, PROTO_FORD);
     if (result) return result;
@@ -271,11 +911,9 @@ function saveSignal() {
         drawMessage("No signal to save!", RED);
         return;
     }
-    
     var r = lastResult;
     var ts = Date.now ? Date.now() : 0;
     var filename = "/protopirate_" + r.proto.replace(/[\s\/]/g, "_") + "_" + ts + ".sub";
-    
     var content = "Filetype: Bruce SubGhz File\n";
     content += "Version: 1\n";
     content += "Frequency: " + Math.floor(frequency * 1000000) + "\n";
@@ -285,7 +923,6 @@ function saveSignal() {
     content += "# Serial: " + toHex(r.serial, 7) + " Button: " + r.btnName + "\n";
     content += "# Counter: " + toHex(r.counter, 4) + " CRC: " + (r.crcOk ? "OK" : "FAIL") + "\n";
     content += "RAW_Data: " + lastRawData + "\n";
-    
     try {
         storage.write(filename, content);
         drawMessage("Saved!\n" + filename, GREEN);
@@ -302,28 +939,21 @@ function transmitSignal() {
         delay(1000);
         return;
     }
-    
-    // Show TX menu - increment counter options
     var txMenuIndex = 0;
     var counterIncrement = 1;
-    
     while (true) {
         clearScreen();
         setTextSize(2); setTextColor(YELLOW);
         drawString("TRANSMIT", 10, 5);
         setTextSize(1); setTextColor(WHITE);
         drawString(lastResult.proto + " - " + lastResult.btnName, 10, 28);
-        
         setTextColor(CYAN);
         drawString("Rolling Code Settings:", 10, 45);
         setTextColor(WHITE);
         drawString("Current Cnt: 0x" + toHex(lastResult.counter, 4), 10, 60);
-        
         var newCounter = (lastResult.counter + counterIncrement) & 0xFFFF;
         drawString("New Counter: 0x" + toHex(newCounter, 4), 10, 74);
         drawString("Increment: +" + counterIncrement, 10, 88);
-        
-        // Menu options
         var y = 105;
         var txOpts = ["Inc +1", "Inc +10", "Inc +100", "SEND", "Back"];
         for (var i = 0; i < txOpts.length; i++) {
@@ -334,11 +964,8 @@ function transmitSignal() {
             drawString(txOpts[i], 15, y);
             y += 14;
         }
-        
         setTextColor(YELLOW);
         drawString("[PREV/NEXT] [SEL]", 5, screenHeight - 10);
-        
-        // Handle input
         delay(100);
         if (getEscPress()) { drawResult(lastResult); return; }
         if (getPrevPress()) { txMenuIndex--; if (txMenuIndex < 0) txMenuIndex = 4; }
@@ -348,7 +975,6 @@ function transmitSignal() {
             else if (txMenuIndex === 1) { counterIncrement = 10; }
             else if (txMenuIndex === 2) { counterIncrement = 100; }
             else if (txMenuIndex === 3) {
-                // SEND - build and transmit rolling code
                 doRollingCodeTransmit(newCounter);
                 drawResult(lastResult);
                 return;
@@ -358,79 +984,47 @@ function transmitSignal() {
     }
 }
 
-// Build and transmit a rolling code signal with new counter
 function doRollingCodeTransmit(newCounter) {
     clearScreen();
     setTextSize(2); setTextColor(YELLOW);
     drawString("TX ROLLING", 10, 5);
     setTextSize(1); setTextColor(WHITE);
     drawString("Building signal...", 10, 30);
-    
     var r = lastResult;
-    
-    // Rebuild data with new counter and recalculate CRC
-    // Kia V0 format: [prefix 4b][counter 16b][serial 28b][button 4b][crc 8b] = 60 bits + 1 start
-    var dataHi = r.dataHi & 0x0F000000;  // Preserve prefix bits
+    var dataHi = r.dataHi & 0x0F000000;
     var dataLo = 0;
-    
-    // Insert counter (bits 40-55)
     dataHi |= ((newCounter >>> 8) & 0xFF) << 16;
     dataHi |= (newCounter & 0xFF) << 8;
-    
-    // Insert serial (bits 12-39) 
     dataHi |= (r.serial >>> 20) & 0xFF;
     dataLo |= ((r.serial & 0xFFFFF) << 12) >>> 0;
-    
-    // Insert button (bits 8-11)
     dataLo |= ((r.button & 0x0F) << 8);
-    
-    // Calculate new CRC
     var crcBytes = [
-        (dataHi >>> 16) & 0xFF,
-        (dataHi >>> 8) & 0xFF,
-        dataHi & 0xFF,
-        (dataLo >>> 24) & 0xFF,
-        (dataLo >>> 16) & 0xFF,
-        (dataLo >>> 8) & 0xFF
+        (dataHi >>> 16) & 0xFF, (dataHi >>> 8) & 0xFF, dataHi & 0xFF,
+        (dataLo >>> 24) & 0xFF, (dataLo >>> 16) & 0xFF, (dataLo >>> 8) & 0xFF
     ];
     var newCrc = kiaCrc8(crcBytes);
     dataLo |= newCrc;
-    
     drawString("New Key: " + toHex(dataHi, 8) + toHex(dataLo, 8), 10, 45);
     drawString("Counter: 0x" + toHex(newCounter, 4), 10, 60);
     drawString("CRC: 0x" + toHex(newCrc, 2), 10, 75);
-    
-    // Build PWM waveform
-    var waveform = buildKiaWaveform(dataHi, dataLo);
-    
     setTextColor(RED);
     drawString("Transmitting...", 10, 95);
     drawString("[ESC] to stop", 10, 110);
-    
-    // Transmit using rebuilt data
     setLongPress(true);
     var freqHz = Math.floor(frequency * 1000000);
     var hexData = toHex(dataHi, 8) + toHex(dataLo, 8);
-    
     for (var burst = 0; burst < 3; burst++) {
         if (getEscPress()) break;
-        
         setTextColor(CYAN);
         drawFillRect(10, 125, 80, 14, BLACK);
         drawString("TX: " + (burst + 1) + "/3", 10, 125);
-        
-        // Transmit with proper timing
-        // subghz.transmit(hexData, frequency_hz, te, repeat_count)
         subghz.transmit(hexData, freqHz, 250, 5);
         delay(150);
     }
     setLongPress(false);
-    
-    // Update lastResult with new counter and data for next TX
     lastResult.counter = newCounter;
     lastResult.dataHi = dataHi;
     lastResult.dataLo = dataLo;
-    
     drawMessage("TX Complete!\nCounter: 0x" + toHex(newCounter, 4), GREEN);
     delay(1500);
 }
@@ -452,8 +1046,7 @@ function drawMenu() {
     setTextSize(2); setTextColor(CYAN);
     drawString("ProtoPirate", 10, 5);
     setTextSize(1); setTextColor(WHITE);
-    drawString("Car Key Decoder", 10, 28);
-    
+    drawString("Car Key Decoder v2.0", 10, 28);
     var y = 50;
     for (var i = 0; i < menuItems.length; i++) {
         if (i === menuIndex) {
@@ -494,8 +1087,6 @@ function drawResult(r) {
     drawString("Cnt:0x" + toHex(r.counter, 4), 10, y);
     if (r.crcOk) { setTextColor(GREEN); drawString(" CRC:OK", 80, y); }
     else { setTextColor(RED); drawString(" CRC:FAIL", 80, y); }
-    
-    // Draw menu options
     y = screenHeight - 55;
     var opts = ["Transmit", "Save", "Continue"];
     for (var i = 0; i < opts.length; i++) {
@@ -515,11 +1106,13 @@ function drawInfo() {
     setTextSize(2); setTextColor(CYAN);
     drawString("Protocols", 10, 5);
     setTextSize(1); setTextColor(WHITE);
-    var y = 30;
-    drawString("Kia V0 (61-bit PWM)", 10, y); y += 14;
-    drawString("Ford V0 (64-bit)", 10, y); y += 14;
-    drawString("Suzuki (64-bit PWM)", 10, y); y += 14;
-    drawString("StarLine (64-bit)", 10, y); y += 14;
+    var y = 28;
+    drawString("Kia V0/V1/V2/V3/V4", 10, y); y += 11;
+    drawString("Ford V0, Suzuki", 10, y); y += 11;
+    drawString("StarLine (64-bit)", 10, y); y += 11;
+    drawString("Scher-Khan (35-51 bit)", 10, y); y += 11;
+    drawString("Subaru (64-bit PWM)", 10, y); y += 11;
+    drawString("Fiat V0 (64-bit Man)", 10, y);
     setTextColor(YELLOW);
     drawString("[ESC] Back", 10, screenHeight - 12);
 }
@@ -532,36 +1125,16 @@ function handleMenu() {
     if (getPrevPress()) { menuIndex--; if (menuIndex < 0) menuIndex = menuItems.length - 1; drawMenu(); }
     if (getNextPress()) { menuIndex++; if (menuIndex >= menuItems.length) menuIndex = 0; drawMenu(); }
     if (getSelPress()) {
-        if (menuIndex === 0) {
-            setLongPress(true);  // Buffer key presses during blocking readRaw
-            appState = "receive";
-            drawReceive();
-        }
+        if (menuIndex === 0) { setLongPress(true); appState = "receive"; drawReceive(); }
         else if (menuIndex === 1) { appState = "info"; drawInfo(); }
         else if (menuIndex === 2) { appState = "exit"; }
     }
 }
 
 function handleReceive() {
-    // Check ESC first - setLongPress buffers key presses during blocking calls
-    if (getEscPress()) {
-        setLongPress(false);
-        appState = "menu";
-        drawMenu();
-        return;
-    }
-    
-    // Short timeout (1 sec) for more responsive ESC checking
+    if (getEscPress()) { setLongPress(false); appState = "menu"; drawMenu(); return; }
     var rawContent = subghz.readRaw(1);
-    
-    // Check ESC again after blocking call
-    if (getEscPress()) {
-        setLongPress(false);
-        appState = "menu";
-        drawMenu();
-        return;
-    }
-    
+    if (getEscPress()) { setLongPress(false); appState = "menu"; drawMenu(); return; }
     if (rawContent && rawContent.length > 10) {
         var rawStr = extractRawData(rawContent);
         if (rawStr && rawStr.length > 10) {
@@ -571,7 +1144,7 @@ function handleReceive() {
                 if (result) {
                     setLongPress(false);
                     lastResult = result;
-                    lastRawData = rawStr;  // Store for save/transmit
+                    lastRawData = rawStr;
                     resultMenuIndex = 0;
                     appState = "result";
                     drawResult(result);
@@ -583,43 +1156,17 @@ function handleReceive() {
 }
 
 function handleResult() {
-    if (getEscPress()) {
-        resultMenuIndex = 0;
-        setLongPress(true);
-        appState = "receive";
-        drawReceive();
-        return;
-    }
-    if (getPrevPress()) {
-        resultMenuIndex--;
-        if (resultMenuIndex < 0) resultMenuIndex = 2;
-        drawResult(lastResult);
-    }
-    if (getNextPress()) {
-        resultMenuIndex++;
-        if (resultMenuIndex > 2) resultMenuIndex = 0;
-        drawResult(lastResult);
-    }
+    if (getEscPress()) { resultMenuIndex = 0; setLongPress(true); appState = "receive"; drawReceive(); return; }
+    if (getPrevPress()) { resultMenuIndex--; if (resultMenuIndex < 0) resultMenuIndex = 2; drawResult(lastResult); }
+    if (getNextPress()) { resultMenuIndex++; if (resultMenuIndex > 2) resultMenuIndex = 0; drawResult(lastResult); }
     if (getSelPress()) {
-        if (resultMenuIndex === 0) {
-            // Transmit
-            transmitSignal();
-        } else if (resultMenuIndex === 1) {
-            // Save
-            saveSignal();
-        } else {
-            // Continue receiving
-            resultMenuIndex = 0;
-            setLongPress(true);
-            appState = "receive";
-            drawReceive();
-        }
+        if (resultMenuIndex === 0) { transmitSignal(); }
+        else if (resultMenuIndex === 1) { saveSignal(); }
+        else { resultMenuIndex = 0; setLongPress(true); appState = "receive"; drawReceive(); }
     }
 }
 
-function handleInfo() {
-    if (getEscPress()) { appState = "menu"; drawMenu(); }
-}
+function handleInfo() { if (getEscPress()) { appState = "menu"; drawMenu(); } }
 
 // ============================================================================
 // MAIN
@@ -629,10 +1176,9 @@ clearScreen();
 setTextSize(2); setTextColor(CYAN);
 drawString("ProtoPirate", 30, screenHeight/2 - 15);
 setTextSize(1); setTextColor(WHITE);
-drawString("Car Key Decoder v1.0", 25, screenHeight/2 + 10);
+drawString("Car Key Decoder v2.0", 25, screenHeight/2 + 10);
 delay(1500);
 
-// Set frequency - takes MHz as float, NOT Hz!
 subghz.setFrequency(frequency);
 drawMenu();
 
