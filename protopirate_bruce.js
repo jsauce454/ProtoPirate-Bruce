@@ -1295,6 +1295,9 @@ function handleReceive() {
                     resultMenuIndex = 0;
                     appState = "result";
                     drawResult(result);
+                    // Clear any pending button presses and give user time to see result
+                    delay(500);
+                    getPrevPress(); getNextPress(); getSelPress(); getEscPress();
                     return;
                 }
             }
@@ -1303,10 +1306,34 @@ function handleReceive() {
 }
 
 function handleResult() {
-    if (getEscPress()) { resultMenuIndex = 0; setLongPress(true); appState = "receive"; drawReceive(); return; }
-    if (getPrevPress()) { resultMenuIndex--; if (resultMenuIndex < 0) resultMenuIndex = 2; drawResult(lastResult); }
-    if (getNextPress()) { resultMenuIndex++; if (resultMenuIndex > 2) resultMenuIndex = 0; drawResult(lastResult); }
+    // Check if we have a valid result to display
+    if (!lastResult) {
+        appState = "menu";
+        drawMenu();
+        return;
+    }
+    if (getEscPress()) { 
+        delay(200);
+        resultMenuIndex = 0; 
+        setLongPress(true); 
+        appState = "receive"; 
+        drawReceive(); 
+        return; 
+    }
+    if (getPrevPress()) { 
+        resultMenuIndex--; 
+        if (resultMenuIndex < 0) resultMenuIndex = 2; 
+        drawResult(lastResult); 
+        delay(150);
+    }
+    if (getNextPress()) { 
+        resultMenuIndex++; 
+        if (resultMenuIndex > 2) resultMenuIndex = 0; 
+        drawResult(lastResult); 
+        delay(150);
+    }
     if (getSelPress()) {
+        delay(200);
         if (resultMenuIndex === 0) { transmitSignal(); }
         else if (resultMenuIndex === 1) { saveSignal(); }
         else { resultMenuIndex = 0; setLongPress(true); appState = "receive"; drawReceive(); }
