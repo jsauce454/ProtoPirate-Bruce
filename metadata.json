@@ -10,7 +10,7 @@
   "supported-devices": "Lilygo T-Embed CC1101",
   "files": [
     {
-      "source": "protopirate_bruce.js",
+      "source": "ProtoPirate.js",
       "destination": "ProtoPirate.js"
     }
   ]
