@@ -35,9 +35,9 @@ A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bru
 
 ### Method 1: SD Card (Recommended)
 
-1. Copy `protopirate_bruce.js` to your SD card:
+1. Copy `ProtoPirate.js` to your SD card:
    ```
-   /scripts/protopirate_bruce.js
+   /scripts/ProtoPirate.js
    ```
    Or alternatively:
    - `/BruceScripts/`
@@ -45,12 +45,12 @@ A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bru
 
 2. On your T-Embed CC1101:
    - Navigate to **Others** → **JS Interpreter**
-   - Select `protopirate_bruce.js`
+   - Select `ProtoPirate.js`
 
 ### Method 2: LittleFS
 
 1. Connect T-Embed via USB
-2. Upload `protopirate_bruce.js` to internal storage
+2. Upload `ProtoPirate.js` to internal storage
 3. Run from **Others** → **JS Interpreter**
 
 ## Usage
