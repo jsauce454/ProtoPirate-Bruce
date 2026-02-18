@@ -1,6 +1,6 @@
-# ProtoPirate for Bruce Firmware
+# ProtoPirate
 
-A JavaScript port of the ProtoPirate car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**.
+A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**.
 
 ## Features
 
