@@ -1,14 +1,17 @@
 {
-  "name": "ProtoPirate Bruce",
+  "name": "ProtoPirate",
   "description": "Car key fob decoder with multi-protocol support (Kia V0-V4, Ford, Suzuki, StarLine, Scher-Khan, Subaru, Fiat, Chrysler/Jeep), frequency selection, load/save .sub files, rolling code TX, and CRC validation",
   "category": "RF",
   "version": "2.1.0",
-  "commit": "e1bcc00de23c680499a783aa83939e545abae9d4",
+  "commit": "6d2ac5ba910e8c19d94648ad1f319ad8f47bec0c",
   "owner": "jsauce454",
   "repo": "ProtoPirate-Bruce",
   "path": "/",
   "supported-devices": "Lilygo T-Embed CC1101",
   "files": [
-    "protopirate_bruce.js"
+    {
+      "source": "protopirate_bruce.js",
+      "destination": "ProtoPirate.js"
+    }
   ]
 }
