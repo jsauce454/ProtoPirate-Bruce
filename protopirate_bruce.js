@@ -802,88 +802,128 @@ function extractKiaV3V4(dataHi, dataLo, bitCount, isV3) {
 // ============================================================================
 
 function decodeChrysler(pulses) {
-    var p = PROTO_CHRYSLER;
+    // Try multiple decoding strategies for Chrysler
+    var result = decodeChryslerStrict(pulses);
+    if (result) return result;
+    
+    result = decodeChryslerLoose(pulses);
+    if (result) return result;
+    
+    return null;
+}
+
+function decodeChryslerStrict(pulses) {
     var step = 0;
-    var syncCount = 0;
     var teLast = 0;
     var dataHi = 0;
     var dataLo = 0;
     var bitCount = 0;
     
-    // Chrysler/Jeep/Dodge uses PWM encoding
-    // te_short ~200us, te_long ~400us (with wide tolerance)
-    // Some models have preamble, some don't
+    // Chrysler GQ43VT17T: ~200us short, ~400us long
+    var teShortMin = 120, teShortMax = 280;
+    var teLongMin = 300, teLongMax = 500;
     
     for (var i = 0; i < pulses.length; i++) {
         var level = pulses[i] > 0;
         var dur = abs(pulses[i]);
         
+        // Skip noise (very short pulses < 50us)
+        if (dur < 50) continue;
+        
+        // Skip sync pulses (> 600us)
+        if (dur > 600) {
+            if (bitCount >= 56) {
+                return extractChrysler(dataHi, dataLo, bitCount);
+            }
+            // Reset and keep looking
+            step = 0;
+            continue;
+        }
+        
         if (step === 0) {
-            // Looking for data start - accept short pulse or long sync
-            if (level && dur > 500) {
-                step = 1; syncCount = 1;
-            } else if (level && dur >= 80 && dur <= 350) {
-                step = 2; teLast = dur;
+            if (level && dur >= teShortMin && dur <= teLongMax) {
+                step = 1; teLast = dur;
                 dataHi = 0; dataLo = 0; bitCount = 0;
             }
         } else if (step === 1) {
-            // After sync, look for data start
-            if (level && dur >= 80 && dur <= 350) {
-                step = 2; teLast = dur;
-                dataHi = 0; dataLo = 0; bitCount = 0;
-            } else if (!level && dur > 500) {
-                // Still in sync
-            } else if (level && dur > 500) {
-                syncCount++;
-            } else {
-                step = 0;
-            }
-        } else if (step === 2) {
             if (!level) {
-                var isShortShort = (teLast >= 80 && teLast <= 300) && (dur >= 80 && dur <= 300);
-                var isShortLong = (teLast >= 80 && teLast <= 300) && (dur >= 280 && dur <= 550);
-                var isLongShort = (teLast >= 280 && teLast <= 550) && (dur >= 80 && dur <= 300);
-                var isLongLong = (teLast >= 280 && teLast <= 550) && (dur >= 280 && dur <= 550);
+                var pulseShort = (teLast >= teShortMin && teLast <= teShortMax);
+                var pulseLong = (teLast >= teLongMin && teLast <= teLongMax);
+                var gapShort = (dur >= teShortMin && dur <= teShortMax);
+                var gapLong = (dur >= teLongMin && dur <= teLongMax);
                 
-                if (isShortLong) {
+                if (pulseShort && gapLong) {
                     // Bit 0
                     dataHi = (dataHi << 1) | (dataLo >>> 31);
                     dataLo = (dataLo << 1) >>> 0;
                     bitCount++;
-                    step = 2;
-                } else if (isLongShort) {
+                } else if (pulseLong && gapShort) {
                     // Bit 1
                     dataHi = (dataHi << 1) | (dataLo >>> 31);
                     dataLo = ((dataLo << 1) | 1) >>> 0;
                     bitCount++;
-                    step = 2;
-                } else if (dur > 600) {
-                    // End of transmission
-                    if (bitCount >= 56) {
-                        return extractChrysler(dataHi, dataLo, bitCount);
-                    }
-                    step = 0;
-                } else if (isShortShort || isLongLong) {
-                    // Preamble or invalid - keep trying
-                    step = 2;
-                } else {
-                    // Unknown pattern - check if we have enough bits
-                    if (bitCount >= 56) {
-                        return extractChrysler(dataHi, dataLo, bitCount);
-                    }
-                    step = 0;
                 }
-                
-                if (bitCount >= 66) {
-                    return extractChrysler(dataHi, dataLo, bitCount);
-                }
+                // Continue regardless - try to find more bits
+                step = 0;
             } else {
+                // Another high pulse - update teLast
                 teLast = dur;
             }
         }
     }
     
     if (bitCount >= 56) {
+        return extractChrysler(dataHi, dataLo, bitCount);
+    }
+    return null;
+}
+
+function decodeChryslerLoose(pulses) {
+    // Very loose decoder - just look for any PWM-like pattern
+    var dataHi = 0;
+    var dataLo = 0;
+    var bitCount = 0;
+    
+    // Find pulses in the 100-500us range and try to decode
+    var validPulses = [];
+    for (var i = 0; i < pulses.length; i++) {
+        var dur = abs(pulses[i]);
+        if (dur >= 100 && dur <= 600) {
+            validPulses.push(pulses[i]);
+        }
+    }
+    
+    if (validPulses.length < 20) return null;
+    
+    // Calculate average to determine short vs long threshold
+    var sum = 0;
+    for (var i = 0; i < validPulses.length; i++) {
+        sum += abs(validPulses[i]);
+    }
+    var avg = sum / validPulses.length;
+    var threshold = avg;  // Use average as threshold
+    
+    // Decode using threshold
+    for (var i = 0; i < validPulses.length - 1; i += 2) {
+        var pulse = abs(validPulses[i]);
+        var gap = abs(validPulses[i + 1]);
+        
+        if (validPulses[i] > 0) {  // pulse is high
+            if (pulse < threshold && gap > threshold) {
+                // Short-Long = 0
+                dataHi = (dataHi << 1) | (dataLo >>> 31);
+                dataLo = (dataLo << 1) >>> 0;
+                bitCount++;
+            } else if (pulse > threshold && gap < threshold) {
+                // Long-Short = 1
+                dataHi = (dataHi << 1) | (dataLo >>> 31);
+                dataLo = ((dataLo << 1) | 1) >>> 0;
+                bitCount++;
+            }
+        }
+    }
+    
+    if (bitCount >= 40) {  // Lower threshold for loose decoder
         return extractChrysler(dataHi, dataLo, bitCount);
     }
     return null;
@@ -1529,7 +1569,31 @@ function handleReceive() {
     var rawContent = subghz.readRaw(1);
     if (getEscPress()) { setLongPress(false); appState = "menu"; drawMenu(); return; }
     if (rawContent && rawContent.length > 10) {
+        // Debug: show what we received
+        setLongPress(false);
+        clearScreen();
+        setTextSize(1); setTextColor(CYAN);
+        drawString("RAW RECEIVED:", 10, 5);
+        setTextColor(WHITE);
+        drawString("Len: " + rawContent.length, 10, 18);
+        // Show first 100 chars
+        var preview = rawContent.substring(0, 80);
+        drawString(preview, 5, 32);
+        var preview2 = rawContent.substring(80, 160);
+        if (preview2) drawString(preview2, 5, 45);
+        setTextColor(YELLOW);
+        drawString("[SEL] Continue [ESC] Menu", 5, screenHeight - 12);
+        while (true) {
+            if (getEscPress()) { appState = "menu"; drawMenu(); return; }
+            if (getSelPress()) { setLongPress(true); break; }
+            delay(50);
+        }
+        
         var rawStr = extractRawData(rawContent);
+        // If no RAW_Data found, try using content directly
+        if (!rawStr && rawContent.indexOf(" ") > 0) {
+            rawStr = rawContent;
+        }
         if (rawStr && rawStr.length > 10) {
             var pulses = parseRaw(rawStr);
             if (pulses.length > 20) {
