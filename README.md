@@ -1,7 +1,13 @@
+<<<<<<< Updated upstream
 # ProtoPirate
 
 A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**. Also compatible with M5StickPlus 2 and possibly others! 
+=======
+# ProtoPirate.js
+>>>>>>> Stashed changes
 
+A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**. also works
+ on other CC1101-based devices with a Bruce compatible JS interpreter
 ## Features
 
 - **Real-time signal capture and decoding** using the CC1101 radio
@@ -37,7 +43,7 @@ A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bru
 
 1. Copy `ProtoPirate.js` to your SD card:
    ```
-   /scripts/ProtoPirate.js
+   /scripts/protopirate.js
    ```
    Or alternatively:
    - `/BruceScripts/`
@@ -45,12 +51,12 @@ A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bru
 
 2. On your T-Embed CC1101:
    - Navigate to **Others** → **JS Interpreter**
-   - Select `ProtoPirate.js`
+    - Select `ProtoPirate.js`
 
 ### Method 2: LittleFS
 
 1. Connect T-Embed via USB
-2. Upload `ProtoPirate.js` to internal storage
+2. Upload `protopirate.js` to internal storage
 3. Run from **Others** → **JS Interpreter**
 
 ## Usage
@@ -140,7 +146,7 @@ Version: 1
 Frequency: 433920000
 Preset: FuriHalSubGhzPresetOok650Async
 Protocol: RAW
-# ProtoPirate Decoded: Kia V0
+# protopirate.js Decoded: Kia V0
 # Serial: 1234567 Button: Lock
 # Counter: 1234 CRC: OK
 RAW_Data: 250 -250 250 -250 ...
