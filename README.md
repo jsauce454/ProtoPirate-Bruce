@@ -1,63 +1,159 @@
-<<<<<<< Updated upstream
-# ProtoPirate
+<p align="center">
+  <img src="logo.png" width="128" height="128" alt="ProtoPirate Logo"/>
+</p>
 
-A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**. Also compatible with M5StickPlus 2 and possibly others! 
-=======
-# ProtoPirate.js
->>>>>>> Stashed changes
+<h1 align="center">ProtoPirate</h1>
 
-A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bruce Firmware 1.14+**. also works
- on other CC1101-based devices with a Bruce compatible JS interpreter
+<p align="center">
+  <strong>Car Key Fob Decoder &amp; Emulator for Bruce Firmware</strong><br/>
+  <em>16 protocols &bull; 9 emulatable &bull; Pure JavaScript &bull; Full crypto suite</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-3.0.0-blue?style=flat-square" alt="Version"/>
+  <img src="https://img.shields.io/badge/protocols-16-green?style=flat-square" alt="Protocols"/>
+  <img src="https://img.shields.io/badge/emulatable-9-orange?style=flat-square" alt="Emulatable"/>
+  <img src="https://img.shields.io/badge/platform-Bruce_1.4+-purple?style=flat-square" alt="Platform"/>
+  <img src="https://img.shields.io/badge/device-T--Embed_CC1101-red?style=flat-square" alt="Device"/>
+  <img src="https://img.shields.io/badge/language-JavaScript-yellow?style=flat-square" alt="Language"/>
+</p>
+
+---
+
+## Overview
+
+ProtoPirate is a full-featured car key fob signal decoder and emulator written in pure JavaScript for **Bruce Firmware 1.4+**. Originally ported from the ProtoPirate C application (Flipper Zero), it achieves **full feature parity** including emulate mode with counter advance, button remapping, and protocol-aware signal re-encoding.
+
+Optimized for the **Lilygo T-Embed CC1101** (320×170 display), it also works on other CC1101-based devices with a compatible Bruce JS interpreter.
+
+---
+
 ## Features
 
-- **Real-time signal capture and decoding** using the CC1101 radio
-- **Enhanced multi-protocol support** - automatically detects and decodes 11+ car key protocols
-- **Frequency selection** - switch between 315 MHz, 433.92 MHz, and 868.35 MHz
-- **Load saved signals** - browse and decode .sub files from SD card
-- **Rolling code transmission** - increment counter, recalculate CRC, and transmit
-- **CRC validation** - verifies signal integrity (Kia V0/V1/V2 fully implemented)
-- **Save decoded signals** - stores to .sub files compatible with Bruce/Flipper
-- **Pure JavaScript** - runs on Bruce's built-in JS interpreter, no compilation needed
+| Feature | Description |
+|---------|-------------|
+| **Live RF Capture** | Real-time signal capture and decoding via CC1101 radio |
+| **16 Protocol Decoders** | Auto-detect and decode car key fob signals |
+| **Emulate Mode** | Counter advance + button remapping + signal re-encoding (9 protocols) |
+| **Signal Encoders** | PWM, Manchester, PSA Manchester, VAG T2 Manchester |
+| **Full Crypto Suite** | KeeLoq, TEA, VAG TEA, PSA XOR, YEK — all in pure JS |
+| **File Manager** | Browse, load, and decode `.sub` files from SD card |
+| **History** | Rolling buffer of last 20 decoded signals |
+| **Timing Analyzer** | Inspect raw pulse timing data |
+| **Auto-Save** | Automatic saving of decoded signals |
+| **Frequency Selection** | 315 MHz (US), 433.92 MHz (EU/Asia), 868.35 MHz (EU) |
+| **Preset Selection** | AM650 / AM270 modulation presets |
+| **TX Burst Config** | Configurable burst count: 1×, 3×, 5×, 10× |
+| **CRC Validation** | Per-protocol CRC verification (Kia V0/V1/V2, Ford, PSA) |
+| **Save Signals** | Export to `.sub` files compatible with Bruce/Flipper |
+
+---
 
 ## Supported Protocols
 
-| Protocol | Bits | Encoding | Decode | TX Rolling Code |
-|----------|------|----------|--------|----------------|
-| Kia V0 | 61 | PWM | ✅ | ✅ Full CRC |
-| Kia V1 | 57 | Manchester | ✅ | ✅ CRC-4 |
-| Kia V2 | 53 | Manchester | ✅ | ✅ CRC-4 |
-| Kia V3/V4 | 68 | PWM/KeeLoq | ✅ | ⚠️ Encrypted |
-| Ford V0 | 64 | Manchester | ✅ | ⚠️ Decode only |
-| Suzuki | 64 | PWM | ✅ | ⚠️ Decode only |
-| StarLine | 64 | PWM | ✅ | ⚠️ Decode only |
-| Scher-Khan | 35-51 | PWM | ✅ | ⚠️ Decode only |
-| Subaru | 64 | PWM | ✅ | ⚠️ Decode only |
-| Fiat V0 | 64 | Manchester | ✅ | ⚠️ Decode only |
-| Chrysler/Jeep | 64 | PWM/KeeLoq | ✅ | ⚠️ Encrypted |
+### Full Emulate (Counter Advance + Re-encoding) — 9 Protocols
 
-*More protocols can be added by implementing their CRC algorithms*
+| # | Protocol | Bits | Encoding | CRC / Crypto | Rebuild Function |
+|---|----------|------|----------|--------------|------------------|
+| 1 | **Kia V0** | 61 | PWM | CRC8 (poly 0x7F) | `rebuildKiaV0()` |
+| 2 | **Kia V1** | 57 | Manchester | CRC4 | `rebuildKiaV1()` |
+| 3 | **Kia V2** | 53 | Manchester | CRC4 | `rebuildKiaV2()` |
+| 4 | **Ford V0** | 80 | Manchester | Matrix CRC | `rebuildFordV0()` |
+| 5 | **Subaru** | 64 | PWM | — | `rebuildSubaru()` |
+| 6 | **Suzuki** | 64 | PWM | — | `rebuildSuzuki()` |
+| 7 | **Chrysler** | 64 | PWM | — | `rebuildChrysler()` |
+| 8 | **PSA** (mode 0x23) | 96 | PSA Manchester | XOR encrypt + checksum | `rebuildPSA()` |
+| 9 | **VAG T2 TEA** | 80 | VAG Manchester | TEA encrypt | `rebuildVAGT2()` |
+
+### Decode + Raw Replay — 7 Protocols
+
+| # | Protocol | Bits | Encoding | Encryption | Reason |
+|---|----------|------|----------|------------|--------|
+| 10 | **Kia V3/V4** | 68 | PWM | KeeLoq | Manufacturer key required |
+| 11 | **Kia V5** | 67 | Manchester | Mixer/YEK | Key required |
+| 12 | **Kia V6** | 144 | Manchester | AES-128 | Key required |
+| 13 | **StarLine** | 64 | PWM | KeeLoq | Manufacturer key required |
+| 14 | **Scher-Khan** | 35–51 | PWM | Proprietary | Unknown algorithm |
+| 15 | **Fiat V0** | 71 | Manchester | KeeLoq | Manufacturer key required |
+| 16 | **VAG T1/T3/T4** | 80 | Manchester | AUT64 | Keystore keys required |
+
+> All 16 protocols verified against **KAT** (Rust) and original **ProtoPirate** (C) reference implementations.
+
+---
+
+## Emulate Mode
+
+After decoding a signal, select **Emulate** to enter protocol-aware transmission mode:
+
+1. **Button remapping** — select Lock / Unlock / Trunk / Panic per protocol
+2. **Counter advance** — auto-increment counter (+1 per TX)
+3. **Signal re-encoding** — rebuild signal with new button/counter values
+4. **CRC / Crypto recomputation** — recalculate CRC or re-encrypt as needed
+5. **Transmit** — write temp `.sub` file and send via `subghz.transmitFile()`
+
+### Button Remapping per Protocol
+
+| Protocol | Lock | Unlock | Boot/Trunk | Panic |
+|----------|------|--------|------------|-------|
+| Kia | 0x1 | 0x2 | 0x3 | 0x4 |
+| Ford | 0x1 | 0x2 | 0x4 | 0x8 |
+| Suzuki | 0x3 | 0x4 | 0x2 | 0x1 |
+| Subaru | 0x1 | 0x2 | 0x3 | 0x4 |
+| Chrysler | 0x1 | 0x2 | 0x4 | 0x8 |
+| VAG | 0x20 | 0x10 | 0x40 | — |
+| StarLine | 0x1 | 0x2 | 0x3 | 0x4 |
+| PSA | 0x1 | 0x2 | 0x4 | — |
+| Fiat | 0x2 | 0x1 | 0x4 | — |
+
+---
+
+## Crypto Primitives
+
+All implemented in pure JavaScript — no native modules required:
+
+| Algorithm | Functions | Used By |
+|-----------|----------|---------|
+| **TEA** (32 rounds) | `teaEncrypt()` / `teaDecrypt()` | PSA (BF keys) |
+| **VAG TEA** variant | `vagTeaEncrypt()` / `vagTeaDecrypt()` | VAG T2 |
+| **PSA XOR** | `psaXorEncrypt()` / `psaXorDecrypt()` | PSA mode 0x23 |
+| **PSA Checksum** | `psaChecksum()` | PSA validation |
+| **KeeLoq** (528 rounds) | `keeloqEncrypt()` / `keeloqDecrypt()` | Kia V3/V4, StarLine, Fiat |
+| **KeeLoq Normal Learning** | `keeloqNormalLearning()` | Device key derivation |
+| **YEK** (bit reversal) | `computeYEK()` | Kia V5 |
+| **Key Reversal** | `reverseKey64()` | StarLine, Kia V3/V4 |
+| **CRC8** (poly 0x7F) | `kiaCrc8()` | Kia V0 |
+| **CRC4** | `kiaV1Crc4()` / `kiaV2CalcCrc()` | Kia V1, Kia V2 |
+| **Ford Matrix CRC** | `fordCalcCrc()` | Ford V0 |
+
+---
 
 ## Installation
 
-### Method 1: SD Card (Recommended)
+### From Bruce App Store (Recommended)
 
-1. Copy `ProtoPirate.js` to your SD card:
-   ```
-   /scripts/protopirate.js
-   ```
-   Or alternatively:
-   - `/BruceScripts/`
-   - `/BruceJS/`
+Install directly from the **Bruce App Store** on your device.
 
-2. On your T-Embed CC1101:
-   - Navigate to **Others** → **JS Interpreter**
-    - Select `ProtoPirate.js`
+### Manual — SD Card
 
-### Method 2: LittleFS
+Copy `ProtoPirate_6.js` to your SD card in one of these paths:
 
-1. Connect T-Embed via USB
-2. Upload `protopirate.js` to internal storage
+```
+/BruceJS/RF/ProtoPirate.js
+```
+
+Or alternatively:
+- `/scripts/`
+- `/BruceScripts/`
+
+Then on your device: **Others** → **JS Interpreter** → select the file.
+
+### Manual — LittleFS
+
+1. Connect device via USB
+2. Upload `ProtoPirate_6.js` to internal storage
 3. Run from **Others** → **JS Interpreter**
+
+---
 
 ## Usage
 
@@ -65,111 +161,130 @@ A JavaScript car key fob decoder for the **Lilygo T-Embed CC1101** running **Bru
 
 | Button | Action |
 |--------|--------|
-| **PREV** | Navigate up / Previous option |
-| **NEXT** | Navigate down / Next option |
-| **SEL** | Select / Confirm |
-| **ESC** | Back / Exit |
+| **PREV** (↑) | Navigate up / Previous option |
+| **NEXT** (↓) | Navigate down / Next option |
+| **SEL** (●) | Select / Confirm |
+| **ESC** (←) | Back / Exit |
 
 ### Main Menu
 
-- **Receive Signal** - Start capturing at selected frequency
-- **Load Signal** - Browse and decode saved .sub files from SD card
-- **Set Frequency** - Choose 315 MHz (US), 433.92 MHz (EU/Asia), or 868.35 MHz (EU)
-- **Protocol Info** - View supported protocols
-- **Exit** - Return to Bruce menu
+| Menu Item | Description |
+|-----------|-------------|
+| **Receive** | Start live RF capture at selected frequency |
+| **Load SUB** | Browse and decode `.sub` files from SD card |
+| **History** | View last 20 decoded signals |
+| **Timing** | Analyze raw pulse timing data |
+| **Settings** | Configure frequency, sensitivity, TX burst, preset, auto-save |
+| **Protocols** | Scrollable protocol info page |
+| **Exit** | Return to Bruce menu |
+
+### Settings
+
+| Setting | Options | Default |
+|---------|---------|---------|
+| Frequency | 315.00 / 433.92 / 868.35 MHz | 433.92 MHz |
+| Sensitivity | 5 / 10 / 20 / 30 min pulses | 10 |
+| Pulse Filter | 5 / 50 / 100 / 500 ms max | 50 ms |
+| TX Burst | 1× / 3× / 5× / 10× | 3× |
+| Preset | AM650 / AM270 | AM650 |
+| Auto-Save | ON / OFF | OFF |
 
 ### Receiving Signals
 
-1. Select **Receive Signal**
-2. Press your car key fob near the antenna
-3. Wait for signal to be decoded (~1 second timeout per attempt)
-4. When decoded, you'll see:
+1. Select **Receive** from the main menu
+2. Press your car key fob near the CC1101 antenna
+3. Wait for signal decode (3-second blocking timeout per attempt)
+4. Decoded result shows:
    - Protocol name and bit count
    - Full key data (hex)
    - Serial number
-   - Button name (Lock/Unlock/Trunk/Panic)
-   - Rolling counter
-   - CRC status (OK/FAIL)
+   - Button name (Lock / Unlock / Trunk / Panic)
+   - Rolling counter value
+   - CRC status (OK / FAIL)
+   - Encryption status
 
-### After Decoding - Result Menu
+### After Decoding
 
-- **Transmit** - Open rolling code TX menu
-- **Save** - Save signal to .sub file
-- **Continue** - Return to receiving mode
+| Option | Description |
+|--------|-------------|
+| **Emulate** | Enter emulate mode (counter advance + button remapping) |
+| **Transmit** | Raw replay of captured signal |
+| **Save** | Save signal to `.sub` file |
+| **Continue** | Return to receive mode |
 
-### Rolling Code Transmission
+---
 
-When you select **Transmit**:
+## Signal Encoders
 
-1. View current counter value
-2. Choose increment amount:
-   - **Inc +1** - Add 1 to counter
-   - **Inc +10** - Add 10 to counter  
-   - **Inc +100** - Add 100 to counter
-3. Preview new counter value
-4. Select **SEND** to transmit
+### PWM Encoder (`encodePWM`)
+- Preamble: N pairs of `te_short` high/low
+- Start bit: `te_long` high + `te_long` low
+- Data: bit 0 → short/short, bit 1 → long/long (MSB first)
+- Multi-burst support with configurable gap
 
-The system will:
-- Rebuild the signal with new counter
-- Recalculate CRC (for Kia V0)
-- Transmit 3 bursts
-- Update stored counter for next TX
+### Manchester Encoder (`encodeManchester`)
+- Preamble: N pairs of `te_long` high/low
+- Start: `te_long` high + `te_short` low
+- Data: bit 1 → short high + short low, bit 0 → short low + short high
+- Automatic edge coalescing
 
-## How Rolling Codes Work
+### PSA Manchester Encoder (`encodePSAManchester`)
+- 80-pair preamble @ 250µs
+- Transition: LOW 250µs + HIGH 500µs + LOW 250µs
+- 64-bit key1 + 16-bit key2 Manchester MSB first
+- 10 burst repeats, 10ms inter-burst gap
 
-```
-Capture:    Counter=0x1234, Serial=0x1234567, Button=Lock, CRC=0xAB
-                ↓
-Increment:  Counter=0x1235 (+1)
-                ↓
-Rebuild:    Counter=0x1235, Serial=0x1234567, Button=Lock, CRC=0xCD (new!)
-                ↓
-Transmit:   New valid signal with incremented counter
-```
+### VAG T2 Manchester Encoder (`encodeVAGT2Manchester`)
+- 220-pair preamble @ 300µs
+- Sync: LOW 300µs + HIGH 300µs
+- Prefix 0xAF1C (16-bit, NOT inverted)
+- Key1 (64-bit) + Key2 (16-bit) INVERTED Manchester MSB first
+- 10 burst repeats, 10ms inter-burst gap
 
-**Why this works:**
-- Car receivers accept counters within a "window" (typically +1 to +256 ahead)
-- Each TX increments the stored counter
-- Subsequent transmissions continue from new counter value
+---
 
 ## Saved File Format
 
-Files are saved to SD card root:
+Files are saved to SD card:
 ```
 /protopirate_Kia_V0_1708142400000.sub
 ```
 
-Contents:
+Example contents:
 ```
 Filetype: Bruce SubGhz File
 Version: 1
 Frequency: 433920000
 Preset: FuriHalSubGhzPresetOok650Async
 Protocol: RAW
-# protopirate.js Decoded: Kia V0
+# ProtoPirate Decoded: Kia V0
 # Serial: 1234567 Button: Lock
 # Counter: 1234 CRC: OK
 RAW_Data: 250 -250 250 -250 ...
 ```
+
+---
 
 ## Technical Details
 
 ### Kia V0 Data Structure (61 bits)
 
 ```
-[Prefix 4b][Counter 16b][Serial 28b][Button 4b][CRC 8b]
+┌─────────┬──────────┬──────────┬────────┬───────┐
+│ Prefix  │ Counter  │  Serial  │ Button │  CRC  │
+│  4 bit  │  16 bit  │  28 bit  │ 4 bit  │ 8 bit │
+└─────────┴──────────┴──────────┴────────┴───────┘
 ```
 
 - **Prefix**: Header bits (preserved from capture)
-- **Counter**: Rolling code counter (0x0000-0xFFFF)
+- **Counter**: Rolling code (0x0000–0xFFFF)
 - **Serial**: Unique fob identifier
 - **Button**: 0x01=Lock, 0x02=Unlock, 0x03=Trunk, 0x04=Panic
 - **CRC**: CRC-8 with polynomial 0x7F
 
-### CRC Calculation
+### CRC-8 Implementation
 
 ```javascript
-// Kia V0 CRC-8 (polynomial 0x7F)
 function kiaCrc8(bytes) {
     var crc = 0;
     for (var i = 0; i < bytes.length; i++) {
@@ -183,93 +298,102 @@ function kiaCrc8(bytes) {
 }
 ```
 
-### PWM Encoding
+---
 
-- **Bit 0**: Short pulse + Short gap (250µs + 250µs)
-- **Bit 1**: Long pulse + Long gap (500µs + 500µs)
-- **Preamble**: 16x short-short pairs
-- **Start**: Long-long pair
+## Known Limitations
+
+| # | Limitation | Reason |
+|---|-----------|--------|
+| 1 | Encrypted protocol emulation (KeeLoq/AES/AUT64) | Requires manufacturer keys |
+| 2 | PSA mode 0x36 emulation | TEA brute force infeasible on ESP32 |
+| 3 | VAG T1 AUT64 emulation | Requires keystore keys |
+| 4 | Frequency hopping | Bruce JS API is synchronous/blocking |
+| 5 | `subghz.transmit()` limited to 24-bit keys | Uses `transmitFile()` instead |
+| 6 | MAX_PULSES = 4096 | Adequate for car fob signals (60–200 pulses) |
+| 7 | Hold-to-transmit | `transmitFile` is blocking; one TX per button press |
+
+---
 
 ## Troubleshooting
 
-### Can't exit receive mode
-- Hold **ESC** for ~1 second (blocking read has 1s timeout)
+| Problem | Solution |
+|---------|----------|
+| Can't exit receive mode | Hold **ESC** for ~1 second (3s blocking timeout) |
+| No signals detected | Verify frequency (433.92 MHz default), move antenna closer |
+| CRC always fails | Try multiple captures; signal may be partial |
+| Transmit doesn't work | Counter may be outside acceptance window; try +10 / +100 |
+| App crashes | Restart Bruce; avoid rapid repeated operations (ESP32 memory) |
 
-### No signals detected
-- Verify frequency is 433.92 MHz (default)
-- Move antenna closer to key fob
-- Check CC1101 connection
-
-### CRC always fails
-- Signal may be partially captured
-- Try multiple captures
-- Some regional variants have different CRC
-
-### Transmit doesn't work on car
-- Counter may be outside acceptance window
-- Try higher increment (+10, +100)
-- Some cars have additional security layers
-
-### App crashes
-- Memory limited on ESP32
-- Restart Bruce and try again
-- Avoid rapid repeated operations
+---
 
 ## Legal Notice
 
-⚠️ **WARNING**: This software is for **educational and authorized security research only**.
+> **WARNING**: This software is for **educational and authorized security research only**.
+>
+> - Intercepting or transmitting car key signals without authorization may be **illegal**
+> - Only use on vehicles you **own** or have **explicit written permission** to test
+> - You are solely responsible for complying with all applicable laws
+> - The authors assume no liability for misuse
 
-- Intercepting or transmitting car key signals without authorization may be **illegal**
-- Only use on vehicles you **own** or have **explicit written permission** to test
-- You are solely responsible for complying with all applicable laws
-- The authors assume no liability for misuse
+---
 
 ## Credits
 
-### Original ProtoPirate
-- RocketGod, MMX, Leeroy, gullradriel
+### Original ProtoPirate (C / Flipper Zero)
+- **RocketGod**, **MMX**, **Leeroy**, **gullradriel**
 - The Pirates' Plunder community
 
 ### Protocol Research
-- L0rdDiakon, YougZ, DoobTheGoober
-- Skorp, Slackware, Trikk, Li0ard
+- **L0rdDiakon**, **YougZ**, **DoobTheGoober**
+- **Skorp**, **Slackware**, **Trikk**, **Li0ard**
 
 ### Bruce Firmware
-- @pr3y, @bmorcelli, @IncursioHack
+- **@pr3y**, **@bmorcelli**, **@IncursioHack**
 
 ### JS Port
-- Educational adaptation for T-Embed CC1101
+- Educational adaptation for T-Embed CC1101 with Bruce Firmware
+- **@jsauce454**, **@Senape3000**
+
+---
 
 ## Community
 
 - **Discord**: [The Pirates' Plunder](https://discord.gg/thepirates)
 - **Bruce Firmware**: [GitHub](https://github.com/pr3y/Bruce)
+- **Bruce App Store**: [App-Store-Data](https://github.com/BruceDevices/App-Store-Data)
+
+---
 
 ## Version History
 
-### v2.1
-- Added Load Signal feature - browse and decode .sub files from SD card
+### v3.0.0 — Full Feature Parity
+- **16 protocol decoders** verified against KAT (Rust) and original C reference
+- **Emulate mode** with counter advance, button remapping, and signal re-encoding for **9 protocols**
+- **PSA emulate** (mode 0x23 XOR re-encoding with checksum brute-force)
+- **VAG T2 TEA emulate** (TEA encrypt with VAG variant key)
+- **Protocol-specific signal encoders**: PSA Manchester, VAG T2 Manchester
+- **Full crypto library**: KeeLoq, TEA, VAG TEA, PSA XOR, PSA Checksum, YEK
+- Added Kia V5, Kia V6, PSA, VAG T1/T2/T3/T4 protocol decoders
+- Auto-save, scrollable protocol info, timing analyzer
+- History system (last 20 signals)
+- Multi-line RAW_Data parsing, memory-safe pulse limits (MAX_PULSES = 4096)
+- Configurable sensitivity, pulse filter, TX burst count, preset selection
+- 8 critical bug fixes (PSA XOR cipher, PSA mode 0x23, VAG T2 fields, Subaru buttons)
+
+### v2.2.0
+- Added Load Signal feature — browse and decode `.sub` files from SD card
 - Added Chrysler/Jeep protocol decoder (64-bit KeeLoq @ 315 MHz)
 - Added frequency selection menu (315/433.92/868.35 MHz)
 - UI improvements for multi-frequency support
 
-### v2.0
+### v2.0.0
 - Added Kia V1, V2, V3/V4 protocol decoders
-- Added Subaru protocol decoder (64-bit PWM)
-- Added Fiat V0 protocol decoder (64-bit Manchester)
-- Enhanced Scher-Khan decoder (35-51 bit support, MAGIC CODE detection)
-- CRC validation for Kia V1 (CRC-4) and Kia V2
-- Improved protocol detection and auto-identification
-- UI improvements and version bump
+- Added Subaru and Fiat V0 decoders
+- Enhanced Scher-Khan decoder (35–51 bit, MAGIC CODE detection)
+- CRC validation for Kia V1/V2
 
-### v1.1
-- Added rolling code transmission with counter increment
-- CRC recalculation for Kia V0
-- Transmit menu with increment options
-- Fixed ESC responsiveness in receive mode
+### v1.1.0
+- Rolling code transmission with counter increment and CRC recalculation
 
-### v1.0
-- Initial JS port
-- Multi-protocol decoding
-- Save to .sub file
-- Basic replay (raw)
+### v1.0.0
+- Initial JS port — multi-protocol decoding, save to `.sub`, basic replay
